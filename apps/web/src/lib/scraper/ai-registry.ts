@@ -343,7 +343,7 @@ export const EXTRACTION_PROVIDERS: Record<string, ProviderConfig> = {
           '--print',
           '--model', model,
           '--permission-mode', 'default',
-          '--disallowedTools', 'Bash,Edit,MultiEdit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,TodoWrite',
+          '--disallowedTools', 'Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,TodoWrite',
         ], {
           timeout: 240_000,
           env,

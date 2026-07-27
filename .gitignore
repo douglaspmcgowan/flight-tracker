@@ -1,5 +1,9 @@
 node_modules/
 .next/
+.next-local/
+.next-flight-finder/
+apps/web/.next-e2e/
+apps/web/.next-flight-finder.stale-*/
 out/
 dist/
 *.tsbuildinfo
@@ -27,6 +31,12 @@ next-env.d.ts
 .vercel
 .turbo
 default.profraw
+playwright-report/
+test-results/
+*.log
+.vercel-*.out
+.vercel-*.err
 
 # Prisma 7 generated client (run `prisma generate`)
 apps/web/src/generated/
+.env*

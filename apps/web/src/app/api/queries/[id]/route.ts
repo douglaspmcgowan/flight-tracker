@@ -6,17 +6,23 @@ import { authorizeMutation } from '@/lib/query-auth';
 import { getCurrentUser } from '@/lib/user-auth';
 import { isAggregatorSource } from '@/lib/scraper/navigate';
 import { isValidPriceAmount } from '@/lib/limits';
+import { BAGGAGE_BENEFITS, type BaggageBenefit } from '@/lib/baggage-cost';
 
 const ALLOWED_INTERVALS = [1, 3, 6, 12, 24];
 const MAX_STOPS_VALUE = 10;
 const MAX_AIRLINE_LENGTH = 100;
+const MAX_TRAVELERS = 9;
+const MAX_CHECKED_BAGS = 18;
 
 type TrackerEditValue = string | number | boolean | string[] | null;
 type TrackerEditField =
   | 'maxPrice'
   | 'maxStops'
   | 'maxDurationHours'
-  | 'preferredAirlines';
+  | 'preferredAirlines'
+  | 'travelerCount'
+  | 'checkedBagCount'
+  | 'baggageBenefit';
 
 interface EditableQuery {
   id: string;
@@ -28,6 +34,9 @@ interface EditableQuery {
   maxDurationHours: number | null;
   preferredAirlines: string[];
   preferredAggregators: string[];
+  travelerCount: number;
+  checkedBagCount: number;
+  baggageBenefit: string;
 }
 
 interface TrackerEditChange {
@@ -52,6 +61,9 @@ const EDIT_FIELD_LABELS: Record<TrackerEditField, string> = {
   maxStops: 'Stops',
   maxDurationHours: 'Max duration',
   preferredAirlines: 'Airlines',
+  travelerCount: 'Travelers',
+  checkedBagCount: 'Checked bags',
+  baggageBenefit: 'Baggage benefit',
 };
 
 function hasOwn(body: object, field: string): boolean {
@@ -92,6 +104,14 @@ function formatEditValue(field: TrackerEditField, value: TrackerEditValue): stri
       return `Under ${value}h`;
     case 'preferredAirlines':
       return String(value);
+    case 'travelerCount':
+      return `${value} traveler${value === 1 ? '' : 's'}`;
+    case 'checkedBagCount':
+      return `${value} checked bag${value === 1 ? '' : 's'}`;
+    case 'baggageBenefit':
+      if (value === 'delta_platinum_amex') return 'Delta Platinum AmEx';
+      if (value === 'delta_platinum_medallion') return 'Delta Platinum Medallion';
+      return 'No baggage benefit';
   }
 }
 
@@ -159,6 +179,9 @@ export async function PATCH(
       maxDurationHours: true,
       preferredAirlines: true,
       preferredAggregators: true,
+      travelerCount: true,
+      checkedBagCount: true,
+      baggageBenefit: true,
     },
   });
 
@@ -176,6 +199,9 @@ export async function PATCH(
     maxStops?: number | null;
     maxDurationHours?: number | null;
     preferredAirlines?: string[];
+    travelerCount?: number;
+    checkedBagCount?: number;
+    baggageBenefit?: string;
   } = {};
   // Per-row fields: applied only to the single id. preferredAggregators is
   // intentionally NOT cascaded — different siblings in a flex group can sit on
@@ -257,6 +283,30 @@ export async function PATCH(
     cascadeData.preferredAirlines = airlines;
   }
 
+  if (body && hasOwn(body, 'travelerCount')) {
+    const travelerCount = Number(body.travelerCount);
+    if (!Number.isInteger(travelerCount) || travelerCount < 1 || travelerCount > MAX_TRAVELERS) {
+      return apiError(`travelerCount must be an integer between 1 and ${MAX_TRAVELERS}`, 400);
+    }
+    cascadeData.travelerCount = travelerCount;
+  }
+
+  if (body && hasOwn(body, 'checkedBagCount')) {
+    const checkedBagCount = Number(body.checkedBagCount);
+    if (!Number.isInteger(checkedBagCount) || checkedBagCount < 0 || checkedBagCount > MAX_CHECKED_BAGS) {
+      return apiError(`checkedBagCount must be an integer between 0 and ${MAX_CHECKED_BAGS}`, 400);
+    }
+    cascadeData.checkedBagCount = checkedBagCount;
+  }
+
+  if (body && hasOwn(body, 'baggageBenefit')) {
+    const baggageBenefit = body.baggageBenefit as BaggageBenefit;
+    if (!BAGGAGE_BENEFITS.includes(baggageBenefit)) {
+      return apiError(`baggageBenefit must be one of: ${BAGGAGE_BENEFITS.join(', ')}`, 400);
+    }
+    cascadeData.baggageBenefit = baggageBenefit;
+  }
+
   if (body && hasOwn(body, 'label')) {
     if (body.label === null) {
       singleRowData.label = null;
@@ -301,6 +351,9 @@ export async function PATCH(
         maxDurationHours: true,
         preferredAirlines: true,
         preferredAggregators: true,
+        travelerCount: true,
+        checkedBagCount: true,
+        baggageBenefit: true,
       },
     });
     cascadeTargets.push(...siblings);
@@ -312,6 +365,9 @@ export async function PATCH(
   if (hasOwn(cascadeData, 'maxStops')) eventData.maxStops = cascadeData.maxStops ?? null;
   if (hasOwn(cascadeData, 'maxDurationHours')) eventData.maxDurationHours = cascadeData.maxDurationHours ?? null;
   if (hasOwn(cascadeData, 'preferredAirlines')) eventData.preferredAirlines = cascadeData.preferredAirlines ?? [];
+  if (hasOwn(cascadeData, 'travelerCount')) eventData.travelerCount = cascadeData.travelerCount ?? 1;
+  if (hasOwn(cascadeData, 'checkedBagCount')) eventData.checkedBagCount = cascadeData.checkedBagCount ?? 0;
+  if (hasOwn(cascadeData, 'baggageBenefit')) eventData.baggageBenefit = cascadeData.baggageBenefit ?? 'none';
 
   const editedAt = new Date();
   const user = await getCurrentUser().catch(() => null);

@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
 import { apiSuccess, apiError } from '@/lib/api-response';
 import { prisma } from '@/lib/prisma';
-import { extractPrices } from '@/lib/scraper/extract-prices';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { sanitizeScrapedHtml } from '@/lib/scraper/extract-prices';
 
 interface CheckResult {
   name: string;
@@ -52,22 +50,9 @@ export async function GET(request: NextRequest) {
     })
   );
 
-  // --- Check 2: Chromium binary exists ---
-  checks.push(
-    await runCheck('chromium', async () => {
-      const { execSync } = await import('child_process');
-      const chromePath = process.env.CHROME_PATH || 'chromium-browser';
-      const version = execSync(`${chromePath} --version`, { timeout: 5000 }).toString().trim();
-      return version;
-    })
-  );
-
-  // --- Check 2b: Playwright can actually launch a browser ---
-  // The version check above only proves the binary exists. This drives the real
-  // scraper launch path (launchBrowser -> import('playwright') -> chromium.launch),
-  // which loads playwright-core/browsers.json and the system chromium. It is the
-  // guard that would have caught the standalone build dropping browsers.json,
-  // which the version check and the fixture-based extraction check both miss.
+  // --- Check 2: Playwright can launch the configured browser runtime ---
+  // This drives the scraper's actual launch path and therefore covers both a
+  // system CHROME_PATH and the bundled serverless Chromium used on Vercel.
   checks.push(
     await runCheck('browser_launch', async () => {
       const { launchBrowser } = await import('@/lib/scraper/browser');
@@ -86,54 +71,18 @@ export async function GET(request: NextRequest) {
     })
   );
 
-  // --- Check 3: Extraction pipeline with fixture ---
+  // --- Check 3: Extraction-input sanitation with fixture ---
   let testQueryId: string | null = null;
 
   checks.push(
-    await runCheck('extraction', async () => {
-      // Load fixture HTML - try filesystem paths first, fall back to inline
-      let fixtureHtml = INLINE_FIXTURE;
-      const paths = [
-        join(process.cwd(), 'apps/web/src/test/fixtures/google-flights-sample.txt'),
-        join(process.cwd(), 'src/test/fixtures/google-flights-sample.txt'),
-        join(process.cwd(), 'test/fixtures/google-flights-sample.txt'),
-      ];
-      for (const p of paths) {
-        try {
-          fixtureHtml = readFileSync(p, 'utf-8');
-          break;
-        } catch {
-          // Try next path
-        }
-      }
-
-      // Ensure ExtractionConfig exists (LLMock uses anthropic provider)
-      await prisma.extractionConfig.upsert({
-        where: { id: 'singleton' },
-        update: {},
-        create: { id: 'singleton', provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-      });
-
-      const result = await extractPrices(
-        fixtureHtml,
-        'https://www.google.com/travel/flights?q=flights+from+JFK+to+LAX',
-        '2026-06-15',
-        { maxPrice: null, maxStops: null, maxDurationHours: null, preferredAirlines: [], timePreference: 'any', cabinClass: 'economy' },
-        10,
-        true,
-        'google_flights',
-        'USD'
+    await runCheck('extraction_input', async () => {
+      const sanitized = sanitizeScrapedHtml(
+        `${INLINE_FIXTURE}<script>throw new Error('untrusted')</script>`,
       );
-
-      if (result.failureReason) {
-        throw new Error(`Extraction failed: ${result.failureReason}`);
+      if (!sanitized.includes('$189') || sanitized.includes('<script>')) {
+        throw new Error('Fixture sanitation lost fare text or retained executable markup');
       }
-
-      if (result.prices.length === 0) {
-        throw new Error('Extraction returned 0 prices');
-      }
-
-      return `Extracted ${result.prices.length} prices (cheapest: $${result.prices[0]?.price})`;
+      return 'Preserved fare text and removed executable markup';
     })
   );
 

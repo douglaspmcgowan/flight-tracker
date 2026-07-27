@@ -63,7 +63,7 @@
 }
 
 .handle {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--text-secondary);
 }

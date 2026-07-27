@@ -64,7 +64,7 @@
 .input,
 .select {
   padding: 0.625rem 0.75rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.875rem;
   color: var(--text);
   background: var(--elevated);
@@ -163,7 +163,7 @@
 .msg {
   font-size: 0.8125rem;
   color: var(--accent);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 .empty {
@@ -214,7 +214,7 @@
 
 .badgeOn,
 .badgeOff {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -233,7 +233,7 @@
 }
 
 .rowMsg {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--accent);
 }

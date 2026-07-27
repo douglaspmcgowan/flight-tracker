@@ -8,7 +8,7 @@
 .links {
   font-size: 0.8125rem;
   color: var(--muted);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 .links a {

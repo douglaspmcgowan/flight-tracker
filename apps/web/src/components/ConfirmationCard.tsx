@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl';
 import type { Airport } from '@/lib/scraper/parse-query';
 import { formatCurrency } from '@/lib/currency';
 import styles from './ConfirmationCard.module.css';
+import type { BaggageBenefit } from '@/lib/baggage-cost';
 
 export interface ParsedQuery {
   origin: string;
@@ -26,6 +27,9 @@ export interface ParsedQuery {
   cabinClass: string;
   tripType: string;
   currency: string | null;
+  travelerCount?: number;
+  checkedBagCount?: number;
+  baggageBenefit?: BaggageBenefit;
 }
 
 function formatDate(iso: string): string {
@@ -43,7 +47,10 @@ function hasFilters(p: ParsedQuery): boolean {
     (p.maxDurationHours !== null && p.maxDurationHours > 0) ||
     p.preferredAirlines.length > 0 ||
     p.timePreference !== 'any' ||
-    p.cabinClass !== 'economy'
+    p.cabinClass !== 'economy' ||
+    (p.travelerCount ?? 1) > 1 ||
+    (p.checkedBagCount ?? 0) > 0 ||
+    (p.baggageBenefit ?? 'none') !== 'none'
   );
 }
 
@@ -234,6 +241,19 @@ export function ConfirmationCard({
           )}
           {parsed.cabinClass !== 'economy' && (
             <span className={styles.tag}>{parsed.cabinClass.replace('_', ' ')}</span>
+          )}
+          {(parsed.travelerCount ?? 1) > 1 && (
+            <span className={styles.tag}>{t('travelers', { count: parsed.travelerCount ?? 1 })}</span>
+          )}
+          {(parsed.checkedBagCount ?? 0) > 0 && (
+            <span className={styles.tag}>{t('checkedBags', { count: parsed.checkedBagCount ?? 0 })}</span>
+          )}
+          {(parsed.baggageBenefit ?? 'none') !== 'none' && (
+            <span className={styles.tag}>
+              {parsed.baggageBenefit === 'delta_platinum_medallion'
+                ? t('deltaPlatinumMedallion')
+                : t('deltaPlatinumAmex')}
+            </span>
           )}
         </div>
       )}

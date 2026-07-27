@@ -86,6 +86,111 @@ describe('parseFlightQuery', () => {
     expect(response.parsed?.origins).toHaveLength(1);
   });
 
+  it('deterministically expands Berkeley after model normalization', async () => {
+    mockExtract.mockResolvedValue({
+      content: makeLlmResponse({
+        confidence: 'high',
+        ambiguities: [],
+        parsed: {
+          origins: [{ code: 'ORF', name: 'Norfolk International Airport' }],
+          destinations: [{ code: 'SFO', name: 'San Francisco International Airport' }],
+          dateFrom: '2026-08-14',
+          dateTo: '2026-08-17',
+          flexibility: 0,
+          maxPrice: null,
+          maxStops: 2,
+          preferredAirlines: [],
+          timePreference: 'any',
+          cabinClass: 'economy',
+          tripType: 'round_trip',
+          currency: 'USD',
+        },
+      }),
+      usage: { inputTokens: 100, outputTokens: 50 },
+    });
+
+    const { response } = await parseFlightQuery('Norfolk to Berkeley August 14 to 17, max 2 stops');
+
+    expect(response.parsed?.destination).toBe('OAK');
+    expect(response.parsed?.destinationName).toBe('Berkeley area');
+    expect(response.parsed?.destinations).toEqual([
+      { code: 'OAK', name: 'Oakland International Airport' },
+      { code: 'SFO', name: 'San Francisco International Airport' },
+    ]);
+    expect(response.parsed?.travelerCount).toBe(1);
+    expect(response.parsed?.checkedBagCount).toBe(0);
+    expect(response.parsed?.baggageBenefit).toBe('none');
+  });
+
+  it('does not reuse Berkeley from conversation history after the destination changes', async () => {
+    mockExtract.mockResolvedValue({
+      content: makeLlmResponse({
+        confidence: 'high',
+        ambiguities: [],
+        parsed: {
+          origins: [{ code: 'ORF', name: 'Norfolk International Airport' }],
+          destinations: [{ code: 'LAX', name: 'Los Angeles International Airport' }],
+          dateFrom: '2026-08-14',
+          dateTo: '2026-08-17',
+          flexibility: 0,
+          maxPrice: null,
+          maxStops: 2,
+          preferredAirlines: [],
+          timePreference: 'any',
+          cabinClass: 'economy',
+          tripType: 'round_trip',
+          currency: 'USD',
+        },
+      }),
+      usage: { inputTokens: 100, outputTokens: 50 },
+    });
+
+    const { response } = await parseFlightQuery(
+      'Change the destination to Los Angeles',
+      [{ role: 'user', content: 'Norfolk to Berkeley August 14 to 17' }],
+    );
+
+    expect(response.parsed?.destination).toBe('LAX');
+    expect(response.parsed?.destinations).toEqual([
+      { code: 'LAX', name: 'Los Angeles International Airport' },
+    ]);
+  });
+
+  it('retains Berkeley expansion through a date-only clarification reply', async () => {
+    mockExtract.mockResolvedValue({
+      content: makeLlmResponse({
+        confidence: 'high',
+        ambiguities: [],
+        parsed: {
+          origins: [{ code: 'ORF', name: 'Norfolk International Airport' }],
+          destinations: [{ code: 'SFO', name: 'San Francisco International Airport' }],
+          dateFrom: '2026-08-14',
+          dateTo: '2026-08-17',
+          flexibility: 0,
+          maxPrice: null,
+          maxStops: 2,
+          preferredAirlines: [],
+          timePreference: 'any',
+          cabinClass: 'economy',
+          tripType: 'round_trip',
+          currency: 'USD',
+        },
+      }),
+      usage: { inputTokens: 100, outputTokens: 50 },
+    });
+
+    const { response } = await parseFlightQuery(
+      'August 14–17',
+      [{ role: 'user', content: 'Norfolk to Berkeley' }],
+    );
+
+    expect(response.parsed?.destination).toBe('OAK');
+    expect(response.parsed?.destinations).toEqual([
+      { code: 'OAK', name: 'Oakland International Airport' },
+      { code: 'SFO', name: 'San Francisco International Airport' },
+    ]);
+  });
+
   it('normalizes legacy flat format to arrays', async () => {
     mockExtract.mockResolvedValue({
       content: makeLlmResponse({

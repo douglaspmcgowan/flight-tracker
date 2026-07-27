@@ -8,7 +8,7 @@
 }
 
 .label {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   font-weight: 500;
   color: var(--muted);
@@ -71,7 +71,7 @@
 }
 
 .errorText {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--price-up);
 }
@@ -107,7 +107,7 @@
 }
 
 .optionCode {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--accent);
@@ -124,7 +124,7 @@
 }
 
 .optionCountry {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--muted);
   margin-left: auto;

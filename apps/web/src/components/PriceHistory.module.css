@@ -3,7 +3,7 @@
 }
 
 .countryHeader {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--accent);
@@ -62,19 +62,19 @@
 }
 
 .date {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--text-secondary);
   white-space: nowrap;
 }
 
 .price {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-weight: 600;
 }
 
 .times {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -87,13 +87,13 @@
 
 .trendUp {
   color: var(--price-up);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
 }
 
 .trendDown {
   color: var(--price-down);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
 }
 
@@ -114,7 +114,7 @@
 }
 
 .seats {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   white-space: nowrap;
 }
@@ -147,7 +147,7 @@
 }
 
 .caption {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   color: var(--muted);
   padding: 0.5rem 0 0.4rem;
@@ -173,7 +173,7 @@
 }
 
 .truncationNote {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   color: var(--muted);
   text-align: center;

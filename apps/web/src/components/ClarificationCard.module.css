@@ -43,7 +43,7 @@
 }
 
 .narrowing {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--muted);
   margin-left: 0.25rem;
@@ -81,7 +81,7 @@
 }
 
 .turnLabel {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -123,7 +123,7 @@
   display: inline-flex;
   align-items: center;
   padding: 0.375rem 0.875rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.8125rem;
   color: var(--accent);
   background: var(--accent-glow);

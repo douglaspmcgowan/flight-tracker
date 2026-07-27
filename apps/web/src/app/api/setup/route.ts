@@ -49,6 +49,7 @@ export async function POST(request: Request) {
   }
 
   const isSelfHosted = process.env.SELF_HOSTED === 'true';
+  const isManagedApp = !isSelfHosted && process.env.APP_SURFACE === 'application';
 
   if (!isSelfHosted && (!adminPassword || adminPassword.length < 8)) {
     return apiError('Password must be at least 8 characters', 400);
@@ -92,6 +93,7 @@ export async function POST(request: Request) {
       communityApiKey,
       customBaseUrl: customBaseUrl || null,
       publicBaseUrl: normalizedPublicBaseUrl,
+      ...(isManagedApp ? { defaultSearchMethod: 'manual' } : {}),
       ...providerKeyData,
     },
     update: {
@@ -102,6 +104,7 @@ export async function POST(request: Request) {
       communityApiKey,
       customBaseUrl: customBaseUrl || null,
       publicBaseUrl: normalizedPublicBaseUrl,
+      ...(isManagedApp ? { defaultSearchMethod: 'manual' } : {}),
       ...providerKeyData,
     },
   });

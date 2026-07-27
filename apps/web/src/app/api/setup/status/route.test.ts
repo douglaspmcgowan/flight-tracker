@@ -21,6 +21,7 @@ describe('GET /api/setup/status -- information disclosure', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.SELF_HOSTED;
+    delete process.env.APP_SURFACE;
   });
 
   it('does not reveal provider names to unauthenticated callers', async () => {
@@ -104,6 +105,17 @@ describe('GET /api/setup/status -- information disclosure', () => {
     const body = await res.json();
     expect(body.isSelfHosted).toBe(false);
     expect(Array.isArray(body.detectedProviders)).toBe(true);
+  });
+
+  it('identifies the hosted personal application during first-run only', async () => {
+    process.env.APP_SURFACE = 'application';
+    mockFindFirst.mockResolvedValue(null);
+
+    const res = await GET();
+    const body = await res.json();
+
+    expect(body.isSelfHosted).toBe(false);
+    expect(body.isManagedApp).toBe(true);
   });
 
   it('stops exposing provider detection once setup is complete (self-hosted)', async () => {

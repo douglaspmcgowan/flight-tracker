@@ -5,7 +5,7 @@
 }
 
 .label {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--muted);
   white-space: nowrap;
@@ -24,7 +24,7 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0.5rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   color: var(--muted);
   background: transparent;

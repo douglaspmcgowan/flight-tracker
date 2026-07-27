@@ -19,7 +19,8 @@ export function HomeBrand() {
   if (
     pathname?.startsWith('/admin') ||
     pathname?.startsWith('/setup') ||
-    pathname?.startsWith('/login')
+    pathname?.startsWith('/login') ||
+    pathname?.startsWith('/awards')
   ) {
     return null;
   }

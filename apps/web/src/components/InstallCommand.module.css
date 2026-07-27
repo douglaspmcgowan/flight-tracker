@@ -20,7 +20,7 @@
 .code {
   flex: 1;
   padding: 1rem 1.25rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.9375rem;
   color: var(--accent);
   user-select: all;

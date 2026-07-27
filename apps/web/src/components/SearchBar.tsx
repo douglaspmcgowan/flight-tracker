@@ -379,6 +379,9 @@ export function SearchBar({
           currency: parsed.currency,
           cabinClass: parsed.cabinClass,
           tripType: parsed.tripType,
+          travelerCount: parsed.travelerCount ?? 1,
+          checkedBagCount: parsed.checkedBagCount ?? 0,
+          baggageBenefit: parsed.baggageBenefit ?? 'none',
           vpnCountries,
           routes: routeSelections.map((selection) => ({
             origin: selection.route.origin,
@@ -538,6 +541,7 @@ export function SearchBar({
               className={styles.searchButton}
               onClick={handleParse}
               disabled={loading || query.trim().length < 5}
+              aria-label={t('submitSearch')}
             >
               {loading ? (
                 <span className={styles.spinner} />

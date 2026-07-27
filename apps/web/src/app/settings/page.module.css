@@ -75,7 +75,7 @@
 }
 
 .themeGroupTitle {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -129,7 +129,7 @@
 }
 
 .themeCardMeta {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   color: var(--accent);
   text-transform: uppercase;
@@ -152,7 +152,7 @@
 
 .select {
   padding: 0.625rem 0.75rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.875rem;
   color: var(--text);
   background: var(--elevated);
@@ -168,7 +168,7 @@
 
 .input {
   padding: 0.625rem 0.75rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.875rem;
   color: var(--text);
   background: var(--elevated);
@@ -218,7 +218,7 @@
 .message {
   font-size: 0.8125rem;
   color: var(--accent);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 .toggleRow {
@@ -260,7 +260,7 @@
 }
 
 .toggleLabel {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.875rem;
   color: var(--text-secondary);
 }
@@ -272,7 +272,7 @@
 }
 
 .code {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.8125rem;
   color: var(--accent);
   background: var(--accent-glow);
@@ -296,7 +296,7 @@
   background: var(--elevated);
   border: 1px solid var(--border);
   font-size: 0.8125rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   color: var(--text);
 }
 
@@ -365,7 +365,7 @@
 }
 
 .providerCardStatus {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   color: var(--muted);
 }
@@ -396,7 +396,7 @@
 }
 
 .providerConfigHint code {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   background: var(--surface);
   padding: 0.15rem 0.4rem;
@@ -470,13 +470,13 @@
 }
 
 .vpnCardDesc {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   color: var(--muted);
 }
 
 .vpnCardStatusReady {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   font-weight: 600;
   color: #22c55e;
@@ -487,14 +487,14 @@
 }
 
 .vpnCardStatusWarn {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   font-weight: 600;
   color: #f59e0b;
 }
 
 .vpnCardStatusOff {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   color: var(--muted);
 }
@@ -530,7 +530,7 @@
 }
 
 .vpnStep code {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   background: var(--elevated);
   padding: 0.1rem 0.3rem;
@@ -547,7 +547,7 @@
   background: rgba(6, 182, 212, 0.1);
   border: 1px solid rgba(6, 182, 212, 0.3);
   color: var(--accent);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6875rem;
   font-weight: 700;
   flex-shrink: 0;
@@ -567,7 +567,7 @@
   background: var(--elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 8px);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.875rem;
   color: var(--muted);
   letter-spacing: 0.15em;
@@ -577,7 +577,7 @@
   background: none;
   border: none;
   color: var(--accent);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   cursor: pointer;
   padding: 0;
@@ -602,7 +602,7 @@
   color: var(--accent);
   text-decoration: none;
   white-space: nowrap;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 .vpnGetCode:hover {
@@ -660,7 +660,7 @@
 }
 
 .vpnStealthList code {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   background: rgba(6, 182, 212, 0.08);
   padding: 0.1rem 0.3rem;
@@ -674,7 +674,7 @@
 }
 
 .modelHint {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--muted);
 }

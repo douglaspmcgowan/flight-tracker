@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Outfit:wght@300..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-
 /* ============================================
    Flight Finder Design System - "Altitude"
    Aviation departure board aesthetic
@@ -9,7 +7,7 @@
   /* Typography */
   --font-display: 'Bricolage Grotesque', sans-serif;
   --font-body: 'Outfit', sans-serif;
-  --font-mono: 'IBM Plex Mono', monospace;
+  --font-data: 'Geist Mono', 'Cascadia Mono', monospace;
 
   /* Spacing */
   --space-xs: 4px;
@@ -404,7 +402,7 @@ a:hover {
 code,
 pre,
 kbd {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 ::selection {

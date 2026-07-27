@@ -11,6 +11,7 @@ import { THEME_OPTIONS, getThemeMode, isThemeId, DEFAULT_THEME } from '@/lib/the
 import adminNamespaces from '../../messages/en/admin.json';
 
 const isSelfHosted = process.env.SELF_HOSTED === 'true';
+const isApplicationSurface = isSelfHosted || process.env.APP_SURFACE === 'application';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://flight-finder.org'),
@@ -81,9 +82,9 @@ const themeModeMap = JSON.stringify(
   Object.fromEntries(THEME_OPTIONS.map((t) => [t.id, t.mode])),
 );
 const themeBootstrapScript = `
-  window.__ftSelfHosted = ${isSelfHosted};
+  window.__ftSelfHosted = ${isApplicationSurface};
   try {
-    if (!${isSelfHosted}) {
+    if (!${isApplicationSurface}) {
       var t = localStorage.getItem('ft-theme');
       var m = ${themeModeMap};
       if (t && m[t]) {
@@ -135,6 +136,12 @@ export default async function RootLayout({
   return (
     <html lang={locale} suppressHydrationWarning data-theme={theme} data-theme-mode={getThemeMode(theme)}>
       <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Geist+Mono:wght@400;500;600&family=Outfit:wght@300..700&display=swap"
+        />
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
         <script dangerouslySetInnerHTML={{ __html: perUserScript }} />
         <script dangerouslySetInnerHTML={{ __html: swScript }} />
@@ -143,7 +150,7 @@ export default async function RootLayout({
         <NextIntlClientProvider locale={locale} messages={messages}>
           <HomeBrand />
           {children}
-          {!isSelfHosted && <ClientBeacon />}
+          {!isApplicationSurface && <ClientBeacon />}
         </NextIntlClientProvider>
       </body>
     </html>

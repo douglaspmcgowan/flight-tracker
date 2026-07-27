@@ -53,16 +53,21 @@ async function runAndReschedule() {
   try {
     const { runScrapeAll, cleanupUnvisitedQueries } = await import('./scraper/run-scrape');
     const { expireDepartedQueries } = await import('./scraper/expire-queries');
+    const { runAwardSearchAll } = await import('./award/run-award-search');
+    const { notifyAlertRules } = await import('./notifications/rules');
 
     await cleanupUnvisitedQueries();
     const expired = await expireDepartedQueries();
     const results = await runScrapeAll();
+    const awardResults = await runAwardSearchAll();
+    const ruleOutcomes = await notifyAlertRules();
     lastScrapeAt = new Date();
 
     const successful = results.filter((r) => r.status === 'success').length;
     const failed = results.filter((r) => r.status === 'failed').length;
     const snapshots = results.reduce((sum, r) => sum + r.snapshotsCount, 0);
-    console.log(`[cron] Scrape complete: ${successful} ok, ${failed} failed, ${snapshots} snapshots, ${expired} expired`);
+    const awardSnapshots = awardResults.reduce((sum, result) => sum + result.snapshotsCount, 0);
+    console.log(`[cron] Scrape complete: ${successful} cash ok, ${failed} cash failed, ${snapshots} cash snapshots, ${awardSnapshots} award snapshots, ${ruleOutcomes.sent} rule alerts, ${expired} expired`);
   } catch (err) {
     console.error('[cron] Scrape failed:', err instanceof Error ? err.message : err);
   }

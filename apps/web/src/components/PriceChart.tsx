@@ -316,7 +316,7 @@ export function PriceChart({ snapshots, allSnapshots, editEvents = [], currency 
     xanchor: 'left' as const,
     yanchor: 'bottom' as const,
     yshift: 4,
-    font: { family: 'IBM Plex Mono, monospace', color: plotTheme.accent, size: 10 },
+    font: { family: 'Geist Mono, Cascadia Mono, monospace', color: plotTheme.accent, size: 10 },
     bgcolor: plotTheme.surface,
     bordercolor: plotTheme.accent,
     borderwidth: 1,
@@ -398,7 +398,7 @@ export function PriceChart({ snapshots, allSnapshots, editEvents = [], currency 
         layout={{
           paper_bgcolor: 'transparent',
           plot_bgcolor: 'transparent',
-          font: { family: 'IBM Plex Mono, monospace', color: plotTheme.axisText, size: 11 },
+          font: { family: 'Geist Mono, Cascadia Mono, monospace', color: plotTheme.axisText, size: 11 },
           margin: { t: 20, r: 20, b: 50, l: 60 },
           xaxis: {
             gridcolor: plotTheme.grid,
@@ -423,7 +423,7 @@ export function PriceChart({ snapshots, allSnapshots, editEvents = [], currency 
           hoverlabel: {
             bgcolor: plotTheme.surface,
             bordercolor: plotTheme.accent,
-            font: { family: 'IBM Plex Mono, monospace', color: plotTheme.text, size: 11 },
+            font: { family: 'Geist Mono, Cascadia Mono, monospace', color: plotTheme.text, size: 11 },
             align: 'left',
           },
           hovermode: 'x unified',

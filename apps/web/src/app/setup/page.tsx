@@ -15,6 +15,7 @@ interface SetupStatus {
   // Once the instance is configured, /api/setup/status returns just the two
   // booleans above, so treat these as optional and default them.
   isSelfHosted?: boolean;
+  isManagedApp?: boolean;
   detectedProviders?: string[];
   currentProvider?: string | null;
   currentModel?: string | null;
@@ -94,6 +95,10 @@ export default function SetupPage() {
           return;
         }
         setStatus(data);
+        if (data.isManagedApp) {
+          setProvider('manual');
+          setModel('manual-input');
+        }
         if (data.isSelfHosted) {
           setStep(1);
         }
@@ -125,7 +130,7 @@ export default function SetupPage() {
         setError(t('passwordMismatch'));
         return;
       }
-      setStep(1);
+      setStep(status?.isManagedApp ? 2 : 1);
       return;
     }
 
@@ -223,6 +228,7 @@ export default function SetupPage() {
 
   const providerEntries = Object.entries(PROVIDER_METADATA);
   const isSelfHosted = status.isSelfHosted ?? false;
+  const isManagedApp = status.isManagedApp ?? false;
   const subtitles = [
     t('subtitlePassword'),
     t('subtitleProvider'),
@@ -251,9 +257,13 @@ export default function SetupPage() {
               <span className={styles.stepDivider}>/</span>
             </>
           )}
-          <span className={`${styles.step} ${step >= 1 ? styles.active : ''}`}>{isSelfHosted ? '1' : '2'}. {t('stepProvider')}</span>
-          <span className={styles.stepDivider}>/</span>
-          <span className={`${styles.step} ${step >= 2 ? styles.active : ''}`}>{isSelfHosted ? '2' : '3'}. {t('stepCommunity')}</span>
+          {!isManagedApp && (
+            <>
+              <span className={`${styles.step} ${step >= 1 ? styles.active : ''}`}>{isSelfHosted ? '1' : '2'}. {t('stepProvider')}</span>
+              <span className={styles.stepDivider}>/</span>
+            </>
+          )}
+          <span className={`${styles.step} ${step >= 2 ? styles.active : ''}`}>{isManagedApp ? '2' : isSelfHosted ? '2' : '3'}. {t('stepCommunity')}</span>
           {isSelfHosted && (
             <>
               <span className={styles.stepDivider}>/</span>

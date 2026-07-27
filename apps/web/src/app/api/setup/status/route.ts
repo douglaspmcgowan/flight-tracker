@@ -7,6 +7,7 @@ export async function GET() {
   });
 
   const isSelfHosted = process.env.SELF_HOSTED === 'true';
+  const isManagedApp = !isSelfHosted && process.env.APP_SURFACE === 'application';
   // Setup is complete once the explicit setup flow has run -- it always sets
   // adminPasswordHash ('self-hosted' sentinel on self-hosted). Do NOT key off
   // provider: it is a NOT NULL column with a default ("anthropic"), so any
@@ -33,6 +34,7 @@ export async function GET() {
     setupComplete: false,
     needsSetup: true,
     isSelfHosted,
+    isManagedApp,
     detectedProviders,
     currentProvider: config?.provider ?? null,
     currentModel: config?.model ?? null,

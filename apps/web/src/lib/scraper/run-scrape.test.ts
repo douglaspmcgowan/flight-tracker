@@ -152,6 +152,42 @@ describe('runScrapeForQuery', () => {
     });
   });
 
+  it('stores deterministic Google Flights text rows without calling an LLM', async () => {
+    mockNavigateGoogleFlights.mockResolvedValue({
+      html: `10:25 AM
+–
+3:55 PM
+Delta
+5 hr 30 min
+JFK–LAX
+Nonstop
+390 kg CO2e
+Avg emissions
+1
+0
+$350
+round trip`,
+      url: 'https://flights.google.com',
+      resultsFound: true,
+      source: 'google_flights',
+    });
+
+    const result = await runScrapeForQuery('q1');
+
+    expect(result.status).toBe('success');
+    expect(result.snapshotsCount).toBe(1);
+    expect(mockExtractPrices).not.toHaveBeenCalled();
+    expect(mockPrisma.priceSnapshot.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          price: 350,
+          airline: 'Delta',
+          stops: 0,
+        }),
+      ]),
+    });
+  });
+
   it('marks previously available flight as sold_out when it disappears', async () => {
     mockPrisma.priceSnapshot.findMany.mockResolvedValue([{
       flightId: 'Delta-1025-JFK-LAX-2026-06-15',

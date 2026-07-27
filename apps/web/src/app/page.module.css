@@ -15,6 +15,26 @@
   gap: 0.5rem;
 }
 
+.awardsLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 0.7rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-data);
+  font-size: 0.75rem;
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.awardsLink:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
 .adminLink {
   display: flex;
   align-items: center;
@@ -69,7 +89,7 @@
   align-items: center;
   gap: 0.5rem;
   color: var(--muted);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.8125rem;
   text-decoration: none;
   padding: 0.4rem 0.8rem;
@@ -143,7 +163,7 @@
 }
 
 .providerTag {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.625rem;
   color: var(--muted);
 }
@@ -170,7 +190,7 @@
   font-size: 0.75rem;
   color: var(--accent);
   cursor: pointer;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 .stealthSummary:hover {
@@ -301,7 +321,7 @@
   display: block;
   width: 100%;
   padding: 1rem 1.25rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.9375rem;
   color: var(--accent);
   background: var(--surface);

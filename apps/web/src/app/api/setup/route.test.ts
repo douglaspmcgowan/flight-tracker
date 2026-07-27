@@ -28,6 +28,7 @@ function setupRequest(body: Record<string, unknown>): Request {
 
 describe('POST /api/setup — provider API key (#149)', () => {
   const savedSelfHosted = process.env.SELF_HOSTED;
+  const savedAppSurface = process.env.APP_SURFACE;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -40,6 +41,8 @@ describe('POST /api/setup — provider API key (#149)', () => {
   afterEach(() => {
     if (savedSelfHosted === undefined) delete process.env.SELF_HOSTED;
     else process.env.SELF_HOSTED = savedSelfHosted;
+    if (savedAppSurface === undefined) delete process.env.APP_SURFACE;
+    else process.env.APP_SURFACE = savedAppSurface;
   });
 
   it('stores an entered key encrypted in the matching column (both upsert branches)', async () => {
@@ -67,5 +70,24 @@ describe('POST /api/setup — provider API key (#149)', () => {
     expect(res.status).toBe(200);
     const args = mockUpsert.mock.calls[0]![0] as { create: Record<string, unknown> };
     expect(JSON.stringify(args.create)).not.toContain('should-be-ignored');
+  });
+
+  it('defaults the hosted personal application to manual search', async () => {
+    process.env.SELF_HOSTED = 'false';
+    process.env.APP_SURFACE = 'application';
+
+    const res = await POST(setupRequest({
+      adminPassword: 'strong-password',
+      provider: 'manual',
+      model: 'manual-input',
+    }));
+
+    expect(res.status).toBe(200);
+    const args = mockUpsert.mock.calls[0]![0] as {
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    };
+    expect(args.create.defaultSearchMethod).toBe('manual');
+    expect(args.update.defaultSearchMethod).toBe('manual');
   });
 });

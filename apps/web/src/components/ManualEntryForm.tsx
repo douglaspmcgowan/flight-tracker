@@ -6,10 +6,16 @@ import type { ParsedQuery } from './ConfirmationCard';
 import { AirportCombobox } from './AirportCombobox';
 import { detectLocaleCurrency } from '@/lib/currency';
 import styles from './ManualEntryForm.module.css';
+import { BERKELEY_AREA } from '@/lib/city-airports';
+import {
+  BAGGAGE_BENEFITS,
+  type BaggageBenefit,
+} from '@/lib/baggage-cost';
 
 export interface ManualFormValues {
   origin: { code: string; name: string } | null;
   destination: { code: string; name: string } | null;
+  destinationArea: string | null;
   dateFrom: string;
   dateTo: string;
   tripType: 'one_way' | 'round_trip';
@@ -21,6 +27,9 @@ export interface ManualFormValues {
   timePreference: 'any' | 'morning' | 'afternoon' | 'evening' | 'redeye';
   cabinClass: 'economy' | 'premium_economy' | 'business' | 'first';
   currency: string;
+  travelerCount: number;
+  checkedBagCount: number;
+  baggageBenefit: BaggageBenefit;
 }
 
 interface ManualEntryFormProps {
@@ -67,6 +76,7 @@ export function ManualEntryForm({
   const iv = initialValues;
   const [origin, setOrigin] = useState<SelectedAirport | null>(iv?.origin ?? null);
   const [destination, setDestination] = useState<SelectedAirport | null>(iv?.destination ?? null);
+  const [destinationArea, setDestinationArea] = useState(iv?.destinationArea ?? null);
   const [dateFrom, setDateFrom] = useState(iv?.dateFrom ?? '');
   const [dateTo, setDateTo] = useState(iv?.dateTo ?? '');
   const [tripType, setTripType] = useState<'one_way' | 'round_trip'>(iv?.tripType ?? 'round_trip');
@@ -94,6 +104,9 @@ export function ManualEntryForm({
     iv?.cabinClass ?? 'economy',
   );
   const [currency, setCurrency] = useState(iv?.currency ?? '');
+  const [travelerCount, setTravelerCount] = useState(iv?.travelerCount ?? 1);
+  const [checkedBagCount, setCheckedBagCount] = useState(iv?.checkedBagCount ?? 0);
+  const [baggageBenefit, setBaggageBenefit] = useState<BaggageBenefit>(iv?.baggageBenefit ?? 'none');
 
   const clearError = (field: string) => {
     setFieldErrors((prev) => {
@@ -145,14 +158,20 @@ export function ManualEntryForm({
 
     const o = origin!;
     const d = destination!;
+    const destinations = destinationArea === BERKELEY_AREA.id
+      ? BERKELEY_AREA.airports.map((airport) => ({ ...airport }))
+      : [{ code: d.code, name: d.name }];
+    const destinationName = destinationArea === BERKELEY_AREA.id
+      ? BERKELEY_AREA.label
+      : d.name;
 
     const query: ParsedQuery = {
       origin: o.code,
       originName: o.name,
       destination: d.code,
-      destinationName: d.name,
+      destinationName,
       origins: [{ code: o.code, name: o.name }],
-      destinations: [{ code: d.code, name: d.name }],
+      destinations,
       dateFrom,
       dateTo: tripType === 'round_trip' ? dateTo : dateFrom,
       flexibility,
@@ -164,6 +183,9 @@ export function ManualEntryForm({
       cabinClass,
       tripType,
       currency: currency || adminCurrency || detectLocaleCurrency(),
+      travelerCount,
+      checkedBagCount,
+      baggageBenefit,
     };
 
     if (flexibility > 0) {
@@ -179,6 +201,7 @@ export function ManualEntryForm({
     const formValues: ManualFormValues = {
       origin: o,
       destination: d,
+      destinationArea,
       dateFrom,
       dateTo: tripType === 'round_trip' ? dateTo : dateFrom,
       tripType,
@@ -190,6 +213,9 @@ export function ManualEntryForm({
       timePreference,
       cabinClass,
       currency,
+      travelerCount,
+      checkedBagCount,
+      baggageBenefit,
     };
     onSubmit(query, rawInput, formValues);
   };
@@ -215,10 +241,31 @@ export function ManualEntryForm({
         label={t('destination')}
         placeholder={t('destinationPlaceholder')}
         value={destination}
-        onChange={(v) => { setDestination(v); clearError('destination'); }}
+        onChange={(v) => {
+          setDestination(v);
+          setDestinationArea(null);
+          clearError('destination');
+        }}
         error={fieldErrors.destination}
         excludeCode={origin?.code}
       />
+
+      <div className={styles.areaPreset}>
+        <span className={styles.areaPresetLabel}>{t('nearbyCity')}</span>
+        <button
+          type="button"
+          className={`${styles.areaPresetButton} ${destinationArea === BERKELEY_AREA.id ? styles.areaPresetActive : ''}`}
+          aria-pressed={destinationArea === BERKELEY_AREA.id}
+          onClick={() => {
+            setDestination({ ...BERKELEY_AREA.airports[0]! });
+            setDestinationArea(BERKELEY_AREA.id);
+            clearError('destination');
+          }}
+        >
+          <span>{t('berkeleyArea')}</span>
+          <span className={styles.areaCodes}>OAK + SFO</span>
+        </button>
+      </div>
 
       <div className={styles.tripToggle}>
         <button
@@ -269,6 +316,60 @@ export function ManualEntryForm({
           </div>
         )}
       </div>
+
+      <fieldset className={styles.tripCostFields}>
+        <legend className={styles.tripCostLegend}>{t('tripCost')}</legend>
+        <p className={styles.tripCostHint}>{t('tripCostHint')}</p>
+        <div className={styles.fieldRow}>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="me-travelers">{t('travelers')}</label>
+            <input
+              id="me-travelers"
+              className={styles.input}
+              type="number"
+              min={1}
+              max={9}
+              value={travelerCount}
+              onChange={(event) => setTravelerCount(Math.max(1, Math.min(9, Number(event.target.value) || 1)))}
+            />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="me-checked-bags">{t('collectiveCheckedBags')}</label>
+            <input
+              id="me-checked-bags"
+              className={styles.input}
+              type="number"
+              min={0}
+              max={18}
+              value={checkedBagCount}
+              onChange={(event) => setCheckedBagCount(Math.max(0, Math.min(18, Number(event.target.value) || 0)))}
+            />
+          </div>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor="me-baggage-benefit">{t('baggageBenefit')}</label>
+          <select
+            id="me-baggage-benefit"
+            className={styles.input}
+            value={baggageBenefit}
+            onChange={(event) => {
+              const value = event.target.value as BaggageBenefit;
+              if (BAGGAGE_BENEFITS.includes(value)) setBaggageBenefit(value);
+            }}
+          >
+            <option value="none">{t('noBaggageBenefit')}</option>
+            <option value="delta_platinum_amex">{t('deltaPlatinumAmex')}</option>
+            <option value="delta_platinum_medallion">{t('deltaPlatinumMedallion')}</option>
+          </select>
+          <span className={styles.benefitHint}>
+            {baggageBenefit === 'delta_platinum_amex'
+              ? t('deltaAmexHint')
+              : baggageBenefit === 'delta_platinum_medallion'
+                ? t('deltaMedallionHint')
+                : t('standardBagFeesHint')}
+          </span>
+        </div>
+      </fieldset>
 
       <button
         type="button"

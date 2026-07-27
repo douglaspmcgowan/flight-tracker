@@ -14,6 +14,8 @@ import { isKnownAirline } from './airline-urls';
 import { getCountryProfile } from './country-profiles';
 import { createVpnProvider, type VpnProviderType } from './vpn';
 import { expandQueryDates } from './scrape-dates';
+import { fetchFastFlights, isFastFlightsEnabled } from './fast-flights-source';
+import { parseGoogleFlightsText } from './google-flights-text';
 
 const RETRYABLE_FAILURES: ExtractionFailureReason[] = [
   'empty_extraction',
@@ -155,6 +157,15 @@ async function scrapeOneDatePair(
 
   async function extractFromNav(nav: NavigationResult, attempt: number): Promise<void> {
     sources.add(nav.source);
+    if (nav.source === 'google_flights' && nav.resultsFound) {
+      const parsed = parseGoogleFlightsText(nav.html, pairParams, filters, nav.url);
+      if (parsed.length > 0) {
+        prices = prices.concat(parsed);
+        lastFailureReason = undefined;
+        console.log(`[extract] OK — ${parsed.length} Google Flights rows parsed without an LLM`);
+        return;
+      }
+    }
     const result = await extractPrices(
       nav.html, nav.url, travelDateFallback, filters, undefined, nav.resultsFound, nav.source, effectiveCurrency,
     );
@@ -166,6 +177,25 @@ async function scrapeOneDatePair(
       await saveDebugHtml(queryId, nav.html, attempt);
     } else {
       lastFailureReason = undefined;
+    }
+  }
+
+  // Step 0 — fast-flights sidecar (keyless, no browser, no LLM). Runs ahead of
+  // the Playwright + LLM chain when enabled. It returns PriceData directly, so
+  // it skips extractFromNav entirely. Any error or empty result falls through
+  // to the Playwright path below — the sidecar is never load-bearing.
+  if (isFastFlightsEnabled() && vpnCountry === null) {
+    try {
+      const ffPrices = await fetchFastFlights(pairParams);
+      if (ffPrices.length > 0) {
+        sources.add('fast_flights');
+        prices = prices.concat(ffPrices);
+        console.log(`[scrape] query=${queryId} pair=${travelDateFallback} fast_flights returned ${ffPrices.length} fares (skipping Playwright)`);
+        return { prices, inputTokens, outputTokens, sources, lastFailureReason: undefined };
+      }
+      console.log(`[scrape] query=${queryId} pair=${travelDateFallback} fast_flights empty -> falling back to Playwright`);
+    } catch (err) {
+      console.error(`[scrape] query=${queryId} pair=${travelDateFallback} fast_flights failed -> Playwright fallback: ${err instanceof Error ? err.message : err}`);
     }
   }
 

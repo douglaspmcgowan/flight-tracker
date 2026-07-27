@@ -427,6 +427,9 @@ describe('PATCH /api/queries/[id]', () => {
       timePreference: 'any',
       cabinClass: 'economy',
       preferredAggregators: [],
+      travelerCount: 1,
+      checkedBagCount: 0,
+      baggageBenefit: 'none',
     };
 
     it('updates tracker filters across grouped queries and records edit events', async () => {
@@ -497,6 +500,67 @@ describe('PATCH /api/queries/[id]', () => {
       expect(data.error).toContain('maxStops');
       expect(mockQueryUpdateMany).not.toHaveBeenCalled();
       expect(mockQueryEditEventCreateMany).not.toHaveBeenCalled();
+    });
+
+    it('updates trip-cost settings across grouped queries and records the assumptions', async () => {
+      process.env.SELF_HOSTED = 'true';
+      mockGetCurrentUser.mockResolvedValue({ id: 'user_1', isAdmin: false });
+      mockQueryFindUnique.mockResolvedValue(editableQuery);
+      mockQueryFindMany.mockResolvedValue([{ ...editableQuery, id: 'q2' }]);
+
+      const res = await PATCH(...makePatchRequest('q1', {
+        travelerCount: 2,
+        checkedBagCount: 4,
+        baggageBenefit: 'delta_platinum_medallion',
+      }));
+      const data = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(data.data).toMatchObject({
+        travelerCount: 2,
+        checkedBagCount: 4,
+        baggageBenefit: 'delta_platinum_medallion',
+        updated: 2,
+      });
+      expect(mockQueryUpdateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['q1', 'q2'] } },
+        data: {
+          travelerCount: 2,
+          checkedBagCount: 4,
+          baggageBenefit: 'delta_platinum_medallion',
+        },
+      });
+      expect(mockQueryEditEventCreateMany).toHaveBeenCalledWith({
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            changes: {
+              changes: expect.arrayContaining([
+                expect.objectContaining({
+                  field: 'baggageBenefit',
+                  afterLabel: 'Delta Platinum Medallion',
+                }),
+              ]),
+            },
+          }),
+        ]),
+      });
+    });
+
+    it.each([
+      ['travelerCount', 0],
+      ['travelerCount', 10],
+      ['checkedBagCount', -1],
+      ['checkedBagCount', 19],
+      ['baggageBenefit', 'unknown'],
+    ])('rejects invalid trip-cost field %s=%s', async (field, value) => {
+      process.env.SELF_HOSTED = 'true';
+      mockQueryFindUnique.mockResolvedValue(editableQuery);
+
+      const res = await PATCH(...makePatchRequest('q1', { [field]: value }));
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toContain(field);
+      expect(mockQueryUpdateMany).not.toHaveBeenCalled();
     });
 
     it('accepts a high denomination maxPrice above the old 1M cap', async () => {

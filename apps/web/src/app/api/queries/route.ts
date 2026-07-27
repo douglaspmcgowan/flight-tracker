@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { NextRequest } from 'next/server';
+import { after, NextRequest } from 'next/server';
 import { apiSuccess, apiError } from '@/lib/api-response';
 import { prisma } from '@/lib/prisma';
 import { isMultiUserEnabled } from '@/lib/multi-user';
@@ -9,6 +9,8 @@ import { getClientIp } from '@/lib/trusted-ip';
 import { redis } from '@/lib/redis';
 import { safeHttpUrl } from '@/lib/safe-url';
 import { isValidPriceAmount } from '@/lib/limits';
+import { BAGGAGE_BENEFITS, type BaggageBenefit } from '@/lib/baggage-cost';
+import { buildFlightId } from '@/lib/flight-identity';
 
 const MAX_ROUTES = 20;
 const MAX_FLIGHTS_PER_ROUTE = 50;
@@ -27,10 +29,13 @@ const MAX_AIRLINE_LENGTH = 100;
 const MAX_FLIGHT_NUMBER_LENGTH = 20;
 const MAX_URL_LENGTH = 2048;
 const MAX_DURATION_LENGTH = 20;
+const MAX_TIME_LENGTH = 30;
 const MAX_CURRENCY_LENGTH = 3;
 
 // Numeric field bounds
 const MAX_STOPS_VALUE = 10;
+const MAX_TRAVELERS = 9;
+const MAX_CHECKED_BAGS = 18;
 
 interface RouteInput {
   origin: string;
@@ -48,6 +53,9 @@ interface RouteInput {
     stops?: number;
     duration?: string | null;
     flightNumber?: string | null;
+    departureTime?: string | null;
+    arrivalTime?: string | null;
+    seatsLeft?: number | null;
   }>;
 }
 
@@ -118,6 +126,9 @@ export async function POST(request: NextRequest) {
     tripType,
     currency: bodyCurrency,
     vpnCountries: bodyVpnCountries,
+    travelerCount: bodyTravelerCount,
+    checkedBagCount: bodyCheckedBagCount,
+    baggageBenefit: bodyBaggageBenefit,
   } = body;
 
   // Validate rawInput length
@@ -158,6 +169,21 @@ export async function POST(request: NextRequest) {
       return apiError(`maxStops must be an integer between 0 and ${MAX_STOPS_VALUE}`, 400);
     }
     maxStopsValidated = n;
+  }
+
+  const travelerCount = bodyTravelerCount === undefined ? 1 : Number(bodyTravelerCount);
+  if (!Number.isInteger(travelerCount) || travelerCount < 1 || travelerCount > MAX_TRAVELERS) {
+    return apiError(`travelerCount must be an integer between 1 and ${MAX_TRAVELERS}`, 400);
+  }
+
+  const checkedBagCount = bodyCheckedBagCount === undefined ? 0 : Number(bodyCheckedBagCount);
+  if (!Number.isInteger(checkedBagCount) || checkedBagCount < 0 || checkedBagCount > MAX_CHECKED_BAGS) {
+    return apiError(`checkedBagCount must be an integer between 0 and ${MAX_CHECKED_BAGS}`, 400);
+  }
+
+  const baggageBenefit = (bodyBaggageBenefit ?? 'none') as BaggageBenefit;
+  if (!BAGGAGE_BENEFITS.includes(baggageBenefit)) {
+    return apiError(`baggageBenefit must be one of: ${BAGGAGE_BENEFITS.join(', ')}`, 400);
   }
 
   const vpnCountries: string[] = Array.isArray(bodyVpnCountries)
@@ -244,6 +270,24 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      for (const [field, value] of [
+        ['departureTime', f.departureTime],
+        ['arrivalTime', f.arrivalTime],
+      ] as const) {
+        if (value !== undefined && value !== null) {
+          if (typeof value !== 'string' || value.length > MAX_TIME_LENGTH) {
+            return apiError(`Selected flight ${field} must be ${MAX_TIME_LENGTH} characters or fewer`, 400);
+          }
+        }
+      }
+
+      if (f.seatsLeft !== undefined && f.seatsLeft !== null) {
+        const seatsLeft = Number(f.seatsLeft);
+        if (!Number.isInteger(seatsLeft) || seatsLeft < 0 || seatsLeft > 999) {
+          return apiError('Selected flight seatsLeft must be an integer between 0 and 999', 400);
+        }
+      }
+
       if (f.bookingUrl !== null && f.bookingUrl !== undefined) {
         if (typeof f.bookingUrl === 'string' && f.bookingUrl.length > MAX_URL_LENGTH) {
           return apiError(`Selected flight bookingUrl must be ${MAX_URL_LENGTH} characters or fewer`, 400);
@@ -308,7 +352,7 @@ export async function POST(request: NextRequest) {
 
   const groupId = crypto.randomUUID();
 
-  const results: Array<{
+  type CreatedQuery = {
     id: string;
     origin: string;
     originName: string;
@@ -318,88 +362,112 @@ export async function POST(request: NextRequest) {
     returnDate?: string;
     deleteToken: string;
     label: string | null;
-  }> = [];
+  };
 
-  for (const route of routeInputs) {
-    const flights = route.selectedFlights || [];
+  const results = await prisma.$transaction(async (tx): Promise<CreatedQuery[]> => {
+    const created: CreatedQuery[] = [];
 
-    const deleteToken = crypto.randomUUID();
+    for (const route of routeInputs) {
+      const flights = route.selectedFlights || [];
+      const deleteToken = crypto.randomUUID();
 
-    // Per-date pinning: when route has a specific date, pin dateFrom to outbound and dateTo to return
-    const routeFrom = route.date ? new Date(route.date + 'T00:00:00Z') : from;
-    const routeTo = route.returnDate ? new Date(route.returnDate + 'T00:00:00Z') : (route.date ? new Date(route.date + 'T00:00:00Z') : to);
-    const routeFlex = route.date ? 0 : flex;
-    const routeExpiry = new Date(routeTo);
-    routeExpiry.setDate(routeExpiry.getDate() + routeFlex);
+      // Per-date pinning: when route has a specific date, pin dateFrom to outbound and dateTo to return
+      const routeFrom = route.date ? new Date(route.date + 'T00:00:00Z') : from;
+      const routeTo = route.returnDate ? new Date(route.returnDate + 'T00:00:00Z') : (route.date ? new Date(route.date + 'T00:00:00Z') : to);
+      const routeFlex = route.date ? 0 : flex;
+      const routeExpiry = new Date(routeTo);
+      routeExpiry.setDate(routeExpiry.getDate() + routeFlex);
 
-    const query = await prisma.query.create({
-      data: {
-        rawInput,
+      const query = await tx.query.create({
+        data: {
+          rawInput,
+          origin: route.origin,
+          originName: route.originName,
+          destination: route.destination,
+          destinationName: route.destinationName,
+          dateFrom: routeFrom,
+          dateTo: routeTo,
+          flexibility: routeFlex,
+          maxPrice: maxPriceValidated,
+          maxStops: maxStopsValidated,
+          maxDurationHours: maxDurationHoursValidated,
+          preferredAirlines: airlines,
+          preferredAggregators: aggregators,
+          label,
+          timePreference: timePreference || 'any',
+          cabinClass: cabinClass || 'economy',
+          tripType: tripType === 'one_way' ? 'one_way' : 'round_trip',
+          currency,
+          travelerCount,
+          checkedBagCount,
+          baggageBenefit,
+          vpnCountries,
+          expiresAt: routeExpiry,
+          firstViewedAt: new Date(),
+          deleteToken,
+          groupId,
+          userId: currentUser?.id ?? null,
+        },
+      });
+
+      if (flights.length > 0) {
+        await tx.priceSnapshot.createMany({
+          data: flights.map((f) => ({
+            queryId: query.id,
+            travelDate: new Date(f.travelDate + 'T00:00:00Z'),
+            price: Number(f.price),
+            currency: f.currency || 'USD',
+            airline: f.airline,
+            bookingUrl: safeHttpUrl(f.bookingUrl) || '',
+            stops: f.stops != null ? Number(f.stops) : 0,
+            duration: f.duration ?? null,
+            flightId: buildFlightId({
+              airline: f.airline,
+              flightNumber: f.flightNumber,
+              departureTime: f.departureTime,
+              origin: route.origin,
+              destination: route.destination,
+              travelDate: f.travelDate,
+            }),
+            flightNumber: f.flightNumber ?? null,
+            departureTime: f.departureTime ?? null,
+            arrivalTime: f.arrivalTime ?? null,
+            seatsLeft: f.seatsLeft == null ? null : Number(f.seatsLeft),
+          })),
+        });
+      }
+
+      created.push({
+        id: query.id,
         origin: route.origin,
         originName: route.originName,
         destination: route.destination,
         destinationName: route.destinationName,
-        dateFrom: routeFrom,
-        dateTo: routeTo,
-        flexibility: routeFlex,
-        maxPrice: maxPriceValidated,
-        maxStops: maxStopsValidated,
-        maxDurationHours: maxDurationHoursValidated,
-        preferredAirlines: airlines,
-        preferredAggregators: aggregators,
-        label,
-        timePreference: timePreference || 'any',
-        cabinClass: cabinClass || 'economy',
-        tripType: tripType === 'one_way' ? 'one_way' : 'round_trip',
-        currency,
-        vpnCountries,
-        expiresAt: routeExpiry,
-        firstViewedAt: new Date(),
+        date: route.date,
+        returnDate: route.returnDate,
         deleteToken,
-        groupId,
-        userId: currentUser?.id ?? null,
-      },
-    });
-
-    if (flights.length > 0) {
-      await prisma.priceSnapshot.createMany({
-        data: flights.map((f) => ({
-          queryId: query.id,
-          travelDate: new Date(f.travelDate + 'T00:00:00Z'),
-          // Store the coerced numeric values (validated above), not the raw
-          // input, so a numeric string like "300" cannot reach Prisma as a string.
-          price: Number(f.price),
-          currency: f.currency || 'USD',
-          airline: f.airline,
-          // safeHttpUrl drops non-http(s) URLs to prevent javascript:/data:/file: injection
-          bookingUrl: safeHttpUrl(f.bookingUrl) || '',
-          stops: f.stops != null ? Number(f.stops) : 0,
-          duration: f.duration ?? null,
-          flightNumber: f.flightNumber ?? null,
-        })),
+        label,
       });
     }
 
-    results.push({
-      id: query.id,
-      origin: route.origin,
-      originName: route.originName,
-      destination: route.destination,
-      destinationName: route.destinationName,
-      date: route.date,
-      returnDate: route.returnDate,
-      deleteToken,
-      label,
-    });
-  }
+    return created;
+  });
 
-  // Fire immediate scrape for all created queries including VPN passes (background, non-blocking)
-  const { runFullScrapeForQuery } = await import('@/lib/scraper/run-scrape');
-  for (const q of results) {
-    runFullScrapeForQuery(q.id).catch((err) => {
-      console.error(`[queries] background scrape failed for ${q.id}:`, err instanceof Error ? err.message : err);
-    });
-  }
+  // Keep the first refresh alive after the response is sent. Next.js `after`
+  // extends the serverless invocation through the registered work.
+  after(async () => {
+    const { runFullScrapeForQuery } = await import('@/lib/scraper/run-scrape');
+    await Promise.all(results.map(async (query) => {
+      try {
+        await runFullScrapeForQuery(query.id);
+      } catch (err) {
+        console.error(
+          `[queries] background scrape failed for ${query.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }));
+  });
 
   return apiSuccess({ queries: results }, 201);
 }

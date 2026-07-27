@@ -74,7 +74,7 @@
 .swatchCaption {
   display: flex;
   justify-content: space-between;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.6rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -98,7 +98,7 @@
 .defaultBtn {
   align-self: flex-start;
   padding: 0.4rem 0.2rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.75rem;
   color: var(--muted);
   background: none;

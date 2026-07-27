@@ -37,7 +37,7 @@
 }
 
 .urlLabel {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -52,7 +52,7 @@
 
 .url {
   flex: 1;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.95rem;
   color: var(--text);
   overflow-wrap: anywhere;

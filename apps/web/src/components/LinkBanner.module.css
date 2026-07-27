@@ -125,7 +125,7 @@
 .urlInput {
   flex: 1;
   padding: 0.625rem 0.75rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.8125rem;
   color: var(--text);
   background: var(--elevated);

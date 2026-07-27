@@ -117,7 +117,7 @@
 
 .priceCol {
   text-align: right;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 .cta {

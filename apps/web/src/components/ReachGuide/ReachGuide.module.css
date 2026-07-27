@@ -41,7 +41,7 @@
 }
 
 .methodBadge {
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.65rem;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -103,7 +103,7 @@
 .code {
   margin: 0.35rem 0 0;
   padding: 0.55rem 0.7rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.8rem;
   color: var(--accent-hover);
   background: var(--bg);

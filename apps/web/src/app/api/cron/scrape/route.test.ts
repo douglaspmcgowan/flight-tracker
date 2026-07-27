@@ -5,6 +5,8 @@ const mockRunScrapeAll = vi.fn();
 const mockCleanup = vi.fn();
 const mockExpire = vi.fn().mockResolvedValue(0);
 const mockNotify = vi.fn().mockResolvedValue(undefined);
+const mockRunAwards = vi.fn().mockResolvedValue([]);
+const mockNotifyRules = vi.fn().mockResolvedValue({ evaluated: 0, sent: 0 });
 
 vi.mock('@/lib/scraper/run-scrape', () => ({
   runScrapeAll: () => mockRunScrapeAll(),
@@ -19,6 +21,14 @@ vi.mock('@/lib/notifications/run', () => ({
   notifyNewLows: (...args: unknown[]) => mockNotify(...args),
 }));
 
+vi.mock('@/lib/award/run-award-search', () => ({
+  runAwardSearchAll: () => mockRunAwards(),
+}));
+
+vi.mock('@/lib/notifications/rules', () => ({
+  notifyAlertRules: () => mockNotifyRules(),
+}));
+
 import { GET } from './route';
 
 function makeRequest(token?: string): NextRequest {
@@ -31,6 +41,10 @@ describe('GET /api/cron/scrape', () => {
   beforeEach(() => {
     mockNotify.mockReset();
     mockNotify.mockResolvedValue(undefined);
+    mockRunAwards.mockReset();
+    mockRunAwards.mockResolvedValue([]);
+    mockNotifyRules.mockReset();
+    mockNotifyRules.mockResolvedValue({ evaluated: 0, sent: 0 });
   });
 
   it('rejects request without auth header with 401', async () => {
@@ -98,6 +112,22 @@ describe('GET /api/cron/scrape', () => {
     const res = await GET(makeRequest('test-cron-secret'));
     expect(res.status).toBe(200);
     expect(mockNotify).toHaveBeenCalledWith(['q-ok'], expect.any(Date));
+  });
+
+  it('runs award searches and unified alert rules in the same cycle', async () => {
+    mockCleanup.mockResolvedValue(0);
+    mockExpire.mockResolvedValue(0);
+    mockRunScrapeAll.mockResolvedValue([]);
+    mockRunAwards.mockResolvedValue([{ awardSearchId: 'award-1', status: 'success', snapshotsCount: 2 }]);
+    mockNotifyRules.mockResolvedValue({ evaluated: 2, sent: 1 });
+
+    const res = await GET(makeRequest('test-cron-secret'));
+    const body = await res.json();
+
+    expect(mockRunAwards).toHaveBeenCalledOnce();
+    expect(mockNotifyRules).toHaveBeenCalledOnce();
+    expect(body.data.awardSearches).toEqual({ processed: 1, successful: 1, snapshots: 2 });
+    expect(body.data.alertRules).toEqual({ evaluated: 2, sent: 1 });
   });
 
   it('still returns 200 when the notification pass throws', async () => {

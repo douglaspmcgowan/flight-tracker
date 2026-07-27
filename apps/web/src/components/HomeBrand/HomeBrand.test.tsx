@@ -20,7 +20,7 @@ describe('HomeBrand', () => {
     expect(screen.getByRole('link', { name: /Flight Finder home/i })).toHaveAttribute('href', '/');
   });
 
-  it.each(['/admin', '/admin/users', '/setup', '/login'])(
+  it.each(['/admin', '/admin/users', '/setup', '/login', '/awards'])(
     'hides itself on %s (own brand or pre-home flow)',
     (path) => {
       vi.mocked(usePathname).mockReturnValue(path);

@@ -24,6 +24,14 @@ import { filterSnapshotsByTrackerFilters } from '@/lib/snapshot-filters';
 import { MAX_TRACKER_EDIT_EVENTS } from '@/lib/tracker-edit-events';
 import { groupDateRange } from './group-date-range';
 import { safeJsonLd } from './safe-json-ld';
+import { formatFlightDate } from '@/lib/format-flight-date';
+import { TripCostComparison } from '@/components/TripCostComparison';
+import {
+  BAGGAGE_BENEFITS,
+  latestSnapshotsByFlight,
+  rankSnapshotsByTripCost,
+  type BaggageBenefit,
+} from '@/lib/baggage-cost';
 import styles from './page.module.css';
 
 interface Props {
@@ -65,9 +73,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-function formatDate(d: Date): string {
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
+const formatDate = formatFlightDate;
 
 function daysUntil(d: Date): number {
   return Math.max(0, Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
@@ -122,6 +128,9 @@ interface QueryWithSnapshots {
     preferredAggregators: string[];
     label: string | null;
     userId: string | null;
+    travelerCount: number;
+    checkedBagCount: number;
+    baggageBenefit: string;
   };
   snapshots: ChartSnapshot[];
   allSnapshots: ChartSnapshot[];
@@ -136,7 +145,17 @@ interface QueryWithSnapshots {
 
 type Translator = Awaited<ReturnType<typeof getTranslations>>;
 
-function renderRouteBlock(qData: QueryWithSnapshots, isMultiRoute: boolean, t: Translator) {
+function normalizeBaggageBenefit(value: string): BaggageBenefit {
+  const candidate = value as BaggageBenefit;
+  return BAGGAGE_BENEFITS.includes(candidate) ? candidate : 'none';
+}
+
+function renderRouteBlock(
+  qData: QueryWithSnapshots,
+  isMultiRoute: boolean,
+  t: Translator,
+  canEdit: boolean,
+) {
   const isRoundTrip = qData.query.tripType === 'round_trip';
   const hasDistinctReturn = qData.query.dateFrom.getTime() < qData.query.dateTo.getTime();
   const dateLabel = isRoundTrip && hasDistinctReturn
@@ -176,7 +195,21 @@ function renderRouteBlock(qData: QueryWithSnapshots, isMultiRoute: boolean, t: T
       </section>
 
       <section className={styles.best}>
-        <BestPrice snapshots={qData.snapshots} />
+        {qData.query.checkedBagCount === 0 && <BestPrice snapshots={qData.snapshots} />}
+      </section>
+
+      <section className={styles.tripCost}>
+        <TripCostComparison
+          queryId={qData.query.id}
+          snapshots={qData.snapshots}
+          travelerCount={qData.query.travelerCount}
+          checkedBagCount={qData.query.checkedBagCount}
+          baggageBenefit={normalizeBaggageBenefit(qData.query.baggageBenefit)}
+          tripType={qData.query.tripType}
+          travelDate={qData.query.dateFrom.toISOString().slice(0, 10)}
+          returnDate={qData.query.dateTo.toISOString().slice(0, 10)}
+          canEdit={canEdit}
+        />
       </section>
 
       <section className={styles.history}>
@@ -201,29 +234,26 @@ function renderRouteBlock(qData: QueryWithSnapshots, isMultiRoute: boolean, t: T
  * bottom in "lowest price first" mode.
  */
 function currentPriceForSibling(qData: QueryWithSnapshots): number | null {
-  if (qData.snapshots.length === 0) return null;
-  const latestByGroup = new Map<string, { price: number; scrapedAt: string; status: string }>();
-  for (const s of qData.snapshots) {
-    const key = s.flightId ?? s.airline;
-    const existing = latestByGroup.get(key);
-    if (!existing || s.scrapedAt > existing.scrapedAt) {
-      latestByGroup.set(key, { price: s.price, scrapedAt: s.scrapedAt, status: s.status });
-    }
-  }
-  let min = Number.POSITIVE_INFINITY;
-  for (const v of latestByGroup.values()) {
-    if (v.status === 'sold_out') continue;
-    if (v.price < min) min = v.price;
-  }
-  return Number.isFinite(min) ? min : null;
+  const ranked = rankSnapshotsByTripCost(
+    latestSnapshotsByFlight(qData.snapshots),
+    {
+      travelerCount: qData.query.travelerCount,
+      checkedBagCount: qData.query.checkedBagCount,
+      baggageBenefit: normalizeBaggageBenefit(qData.query.baggageBenefit),
+      tripType: qData.query.tripType,
+      travelDate: qData.query.dateFrom.toISOString().slice(0, 10),
+      returnDate: qData.query.dateTo.toISOString().slice(0, 10),
+    },
+  );
+  return ranked.find(({ breakdown }) => breakdown.total !== null)?.breakdown.total ?? null;
 }
 
-function buildStackedItem(qData: QueryWithSnapshots, t: Translator): StackedItem {
+function buildStackedItem(qData: QueryWithSnapshots, t: Translator, canEdit: boolean): StackedItem {
   return {
     key: qData.query.id,
     outboundDate: qData.query.dateFrom.toISOString().slice(0, 10),
     currentPrice: currentPriceForSibling(qData),
-    node: renderRouteBlock(qData, true, t),
+    node: renderRouteBlock(qData, true, t, canEdit),
   };
 }
 
@@ -468,9 +498,9 @@ export default async function ChartPage({ params }: Props) {
       ) : null}
 
       {isMultiRoute ? (
-        <StackedSortControls items={allQueries.map((q) => buildStackedItem(q, t))} />
+        <StackedSortControls items={allQueries.map((q) => buildStackedItem(q, t, canEdit))} />
       ) : (
-        renderRouteBlock(primary, false, t)
+        renderRouteBlock(primary, false, t, canEdit)
       )}
 
       <div className={styles.footerMeta}>

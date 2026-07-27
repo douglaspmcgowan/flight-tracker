@@ -26,6 +26,9 @@ model Query {
   cabinClass      String   @default("economy")
   tripType        String   @default("round_trip") // 'one_way' | 'round_trip'
   currency        String?
+  travelerCount   Int      @default(1)
+  checkedBagCount Int      @default(0) // collective standard checked bags per direction
+  baggageBenefit  String   @default("none") // 'none' | 'delta_platinum_amex' | 'delta_platinum_medallion'
   groupId         String?  // links sibling queries created from the same multi-route search
   deleteToken     String?
   active          Boolean  @default(true)
@@ -45,6 +48,7 @@ model Query {
   snapshots PriceSnapshot[]
   fetchRuns FetchRun[]
   editEvents QueryEditEvent[]
+  alertRules AlertRule[]
   user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([active])
@@ -179,6 +183,8 @@ model User {
 
   queries  Query[]
   channels NotificationChannel[]
+  awardSearches AwardSearch[]
+  alertRules AlertRule[]
 
   @@index([isAdmin])
 }
@@ -197,6 +203,76 @@ model NotificationChannel {
 
   @@index([userId])
   @@index([enabled])
+}
+
+model AwardSearch {
+  id              String   @id @default(cuid())
+  origin          String
+  destination     String
+  dateFrom        DateTime
+  dateTo          DateTime
+  cabin           String   @default("economy")
+  programs        String[] @default([])
+  active          Boolean  @default(true)
+  scrapeInterval  Int?     // hours; null follows the global scrape interval
+  lastCheckedAt   DateTime?
+  userId          String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  snapshots AwardSnapshot[]
+  alertRules AlertRule[]
+  user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([active])
+  @@index([lastCheckedAt])
+  @@index([userId])
+}
+
+model AwardSnapshot {
+  id              String   @id @default(cuid())
+  awardSearchId   String
+  program         String
+  origin          String
+  destination     String
+  travelDate      DateTime
+  cabin           String
+  seatsAvailable  Int?
+  mileageCost     Int?
+  taxesFees       String?
+  lastSeen        DateTime?
+  bookingProgram  String?
+  scrapedAt       DateTime @default(now())
+
+  awardSearch AwardSearch @relation(fields: [awardSearchId], references: [id], onDelete: Cascade)
+
+  @@index([awardSearchId, scrapedAt])
+  @@index([awardSearchId, program, travelDate])
+}
+
+model AlertRule {
+  id                  String   @id @default(cuid())
+  type                String   // 'cash_price_below' | 'award_seats_available'
+  queryId             String?
+  awardSearchId       String?
+  threshold           Float?   // cash price or minimum seats required
+  program             String?
+  cabin               String?
+  enabled             Boolean  @default(true)
+  lastNotifiedAt      DateTime?
+  lastConditionKey    String?
+  userId              String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  query       Query?       @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  awardSearch AwardSearch? @relation(fields: [awardSearchId], references: [id], onDelete: Cascade)
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([type, enabled])
+  @@index([queryId])
+  @@index([awardSearchId])
+  @@index([userId])
 }
 
 

@@ -13,6 +13,25 @@ const SESSION_COOKIE = 'ft-session';
 // replayed indefinitely.
 const SESSION_MAX_AGE_MS = 60 * 60 * 24 * 7 * 1000;
 const isSelfHosted = process.env.SELF_HOSTED === 'true';
+const isManagedApp = !isSelfHosted && process.env.APP_SURFACE === 'application';
+
+function isManagedAppExempt(pathname: string): boolean {
+  return pathname === '/admin/login'
+    || pathname === '/setup'
+    || pathname === '/api/setup'
+    || pathname === '/api/setup/status'
+    || pathname === '/api/admin/auth'
+    || pathname === '/api/admin/auth/logout'
+    || pathname === '/api/cron/scrape'
+    || pathname === '/api/test/scrape'
+    || pathname === '/api/health'
+    || pathname === '/robots.txt'
+    || pathname === '/sitemap.xml'
+    || pathname === '/manifest.json'
+    || pathname === '/sw.js'
+    || pathname.startsWith('/icons/')
+    || /\.(?:ico|png|svg|webmanifest)$/.test(pathname);
+}
 
 // Edge-safe HMAC + expiry check for the admin session cookie. The signature
 // algorithm matches lib/admin-auth.ts verifySessionToken, but is reimplemented
@@ -65,7 +84,7 @@ async function verifyHmacToken(token: string): Promise<boolean> {
   }
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Block .php requests — always bot probes
@@ -76,6 +95,22 @@ export async function middleware(request: NextRequest) {
   // Block malicious paths (WordPress probes, .env, etc.)
   if (isMaliciousPath(pathname)) {
     return new NextResponse(null, { status: 404, headers: { 'X-Robots-Tag': 'noindex' } });
+  }
+
+  // A hosted personal application carries private searches, saved trackers,
+  // award observations, and alert configuration. Require the existing admin
+  // session across the application while leaving first-run setup, login,
+  // health, and the CRON_SECRET-protected scheduler reachable.
+  if (isManagedApp && !isManagedAppExempt(pathname)) {
+    const token = request.cookies.get(SESSION_COOKIE)?.value;
+    if (!token || !(await verifyHmacToken(token))) {
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      }
+      const login = new URL('/admin/login', request.url);
+      login.searchParams.set('next', `${pathname}${request.nextUrl.search}`);
+      return NextResponse.redirect(login);
+    }
   }
 
   // Self-hosted: no login page, redirect straight to dashboard

@@ -23,7 +23,7 @@
 
 .loading {
   color: var(--text-secondary);
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
 }
 
 .linkButton {
@@ -98,7 +98,7 @@
 
 .input {
   padding: 0.75rem 1rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-data);
   font-size: 0.9375rem;
   color: var(--text);
   background: var(--surface);

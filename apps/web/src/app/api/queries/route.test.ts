@@ -1,12 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const { mockQueryCreate, mockSnapshotCreateMany } = vi.hoisted(() => ({
+const {
+  mockAfter,
+  mockQueryCreate,
+  mockRunFullScrape,
+  mockSnapshotCreateMany,
+  mockTransaction,
+} = vi.hoisted(() => ({
+  mockAfter: vi.fn(),
   mockQueryCreate: vi.fn().mockImplementation((args: { data: Record<string, unknown> }) =>
     Promise.resolve({ id: 'q-' + Math.random().toString(36).slice(2, 8), ...args.data })
   ),
   mockSnapshotCreateMany: vi.fn().mockResolvedValue({ count: 0 }),
+  mockRunFullScrape: vi.fn().mockResolvedValue(undefined),
+  mockTransaction: vi.fn(),
 }));
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+  return { ...actual, after: mockAfter };
+});
 
 // Redis mock: incr returns 1 (under limit) by default
 const mockRedisIncr = vi.fn().mockResolvedValue(1);
@@ -21,12 +35,17 @@ vi.mock('@/lib/redis', () => ({
   },
 }));
 
+vi.mock('@/lib/scraper/run-scrape', () => ({
+  runFullScrapeForQuery: mockRunFullScrape,
+}));
+
 vi.mock('next/headers', () => ({
   cookies: vi.fn().mockResolvedValue({ get: vi.fn(), set: vi.fn(), delete: vi.fn() }),
 }));
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
+    $transaction: mockTransaction,
     query: { create: mockQueryCreate },
     priceSnapshot: { createMany: mockSnapshotCreateMany },
   },
@@ -73,8 +92,17 @@ const validBody = {
 
 describe('POST /api/queries', () => {
   beforeEach(() => {
+    mockAfter.mockClear();
     mockQueryCreate.mockClear();
+    mockRunFullScrape.mockClear();
     mockSnapshotCreateMany.mockClear();
+    mockTransaction.mockReset();
+    mockTransaction.mockImplementation((callback: (tx: unknown) => unknown) =>
+      callback({
+        query: { create: mockQueryCreate },
+        priceSnapshot: { createMany: mockSnapshotCreateMany },
+      })
+    );
     mockIsMultiUserEnabled.mockResolvedValue(false);
     mockGetCurrentUser.mockResolvedValue(null);
     mockRedisIncr.mockResolvedValue(1);
@@ -150,6 +178,48 @@ describe('POST /api/queries', () => {
     expect(body.data.queries).toHaveLength(1);
     expect(body.data.queries[0].origin).toBe('JFK');
     expect(body.data.queries[0].deleteToken).toBeDefined();
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockAfter).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs every first refresh through the registered after callback', async () => {
+    const res = await POST(makeRequest({
+      ...validBody,
+      routes: [
+        { origin: 'ORF', originName: 'Norfolk', destination: 'OAK', destinationName: 'Oakland', selectedFlights: [] },
+        { origin: 'ORF', originName: 'Norfolk', destination: 'SFO', destinationName: 'San Francisco', selectedFlights: [] },
+      ],
+    }));
+    expect(res.status).toBe(201);
+
+    const afterCallback = mockAfter.mock.calls[0]![0] as () => Promise<void>;
+    await afterCallback();
+    expect(mockRunFullScrape).toHaveBeenCalledTimes(2);
+    const createdIds = mockQueryCreate.mock.results.map((result) =>
+      (result.value as Promise<{ id: string }>).then((query) => query.id)
+    );
+    await expect(Promise.all(createdIds)).resolves.toEqual(
+      mockRunFullScrape.mock.calls.map((call) => call[0]),
+    );
+  });
+
+  it('keeps all sibling writes inside one transaction when a later route fails', async () => {
+    mockQueryCreate
+      .mockImplementationOnce((args: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'oak-id', ...args.data })
+      )
+      .mockRejectedValueOnce(new Error('second route failed'));
+
+    await expect(POST(makeRequest({
+      ...validBody,
+      routes: [
+        { origin: 'ORF', originName: 'Norfolk', destination: 'OAK', destinationName: 'Oakland', selectedFlights: [] },
+        { origin: 'ORF', originName: 'Norfolk', destination: 'SFO', destinationName: 'San Francisco', selectedFlights: [] },
+      ],
+    }))).rejects.toThrow('second route failed');
+
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockAfter).not.toHaveBeenCalled();
   });
 
   it('caps flexibility at 14 days', async () => {
@@ -176,6 +246,41 @@ describe('POST /api/queries', () => {
     };
     await POST(makeRequest(bodyWithFlights));
     expect(mockSnapshotCreateMany).toHaveBeenCalled();
+  });
+
+  it('preserves selected-flight identity and timing fields', async () => {
+    const bodyWithFlights = {
+      ...validBody,
+      routes: [{
+        ...validBody.routes[0],
+        selectedFlights: [{
+          travelDate: '2026-06-15',
+          price: 300,
+          currency: 'USD',
+          airline: 'Delta Air Lines',
+          bookingUrl: 'https://delta.com',
+          stops: 1,
+          duration: '8h 10m',
+          flightNumber: 'DL 345',
+          departureTime: '10:25 AM',
+          arrivalTime: '6:35 PM',
+          seatsLeft: 3,
+        }],
+      }],
+    };
+
+    const res = await POST(makeRequest(bodyWithFlights));
+    expect(res.status).toBe(201);
+    const snapshotCall = mockSnapshotCreateMany.mock.calls[0]![0] as {
+      data: Array<Record<string, unknown>>;
+    };
+    expect(snapshotCall.data[0]).toMatchObject({
+      flightId: 'DeltaAirLines-DL345-JFK-LAX-2026-06-15',
+      flightNumber: 'DL 345',
+      departureTime: '10:25 AM',
+      arrivalTime: '6:35 PM',
+      seatsLeft: 3,
+    });
   });
 
   // Issue 65: a picked Turkish flight used to silently flag the saved query as
@@ -455,6 +560,49 @@ describe('POST /api/queries', () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toContain('maxStops');
+    expect(mockQueryCreate).not.toHaveBeenCalled();
+  });
+
+  it('stores trip-cost settings on every route', async () => {
+    const res = await POST(makeRequest({
+      ...validBody,
+      travelerCount: 2,
+      checkedBagCount: 4,
+      baggageBenefit: 'delta_platinum_amex',
+      routes: [
+        validBody.routes[0],
+        {
+          ...validBody.routes[0],
+          destination: 'SFO',
+          destinationName: 'San Francisco International Airport',
+        },
+      ],
+    }));
+
+    expect(res.status).toBe(201);
+    expect(mockQueryCreate).toHaveBeenCalledTimes(2);
+    for (const [call] of mockQueryCreate.mock.calls) {
+      expect(call.data).toMatchObject({
+        travelerCount: 2,
+        checkedBagCount: 4,
+        baggageBenefit: 'delta_platinum_amex',
+      });
+    }
+  });
+
+  it.each([
+    ['travelerCount', 0],
+    ['travelerCount', 10],
+    ['travelerCount', 1.5],
+    ['checkedBagCount', -1],
+    ['checkedBagCount', 19],
+    ['checkedBagCount', 1.5],
+    ['baggageBenefit', 'platinumish'],
+  ])('rejects invalid %s=%s', async (field, value) => {
+    const res = await POST(makeRequest({ ...validBody, [field]: value }));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain(field);
     expect(mockQueryCreate).not.toHaveBeenCalled();
   });
 

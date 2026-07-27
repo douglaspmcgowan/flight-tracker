@@ -1,5 +1,7 @@
 import { EXTRACTION_PROVIDERS, CLI_PROVIDERS, LOCAL_PROVIDERS, resolveApiKey, type ExtractionResult } from './ai-registry';
 import { prisma } from '@/lib/prisma';
+import { expandDestinationForCity, findCityAirportArea } from '../city-airports';
+import type { BaggageBenefit } from '../baggage-cost';
 
 export interface Airport {
   code: string; // IATA 3-letter code
@@ -26,6 +28,9 @@ export interface ParsedFlightQuery {
   cabinClass: 'economy' | 'premium_economy' | 'business' | 'first';
   tripType: 'one_way' | 'round_trip';
   currency: string | null; // ISO 4217 currency code (e.g., USD, EUR, GBP). null = auto-detect
+  travelerCount?: number;
+  checkedBagCount?: number;
+  baggageBenefit?: BaggageBenefit;
 }
 
 export interface ParseAmbiguity {
@@ -66,7 +71,10 @@ Return ONLY valid JSON with this exact shape:
     "timePreference": "any" | "morning" | "afternoon" | "evening" | "redeye",
     "cabinClass": "economy" | "premium_economy" | "business" | "first",
     "tripType": "one_way" | "round_trip",
-    "currency": null
+    "currency": null,
+    "travelerCount": number,
+    "checkedBagCount": number,
+    "baggageBenefit": "none" | "delta_platinum_amex" | "delta_platinum_medallion"
   }
 }
 
@@ -137,6 +145,11 @@ Parsing rules:
 - Extract price caps if mentioned (e.g. "under $800")
 - Extract trip duration caps when phrased as "under N hours", "less than Nh", "max N hours", "duration < Nh", "shorter than N hours", "no more than Nh", or "flights shorter than N hours". Round fractional values up to whole hours. Set maxDurationHours to null if not mentioned.
 - If no stop preference stated, maxStops is null
+- Default travelerCount to 1 and checkedBagCount to 0 when the user does not mention them
+- checkedBagCount is the collective number of standard checked bags in each direction
+- Set baggageBenefit to "delta_platinum_amex" only when the user explicitly names the Delta Platinum AmEx card
+- Set baggageBenefit to "delta_platinum_medallion" only when the user explicitly names Delta Platinum Medallion status
+- Set baggageBenefit to "none" when the user says only "Delta Platinum" or does not mention a benefit
 - Extract currency if mentioned (e.g. "in euros" → "EUR", "prices in pounds" → "GBP", "in CAD" → "CAD", "¥" → "JPY"). Set to null if not mentioned by the user. Use ISO 4217 codes.
 - Ignore trailing fragments or incomplete words at the end of the input — parse what you can
 - Today's date is ${today}
@@ -215,6 +228,18 @@ function normalizeAirports(parsed: Record<string, unknown>): ParsedFlightQuery {
     dateTo,
     outboundDates: outboundDates?.length ? outboundDates : undefined,
     returnDates: returnDates?.length ? returnDates : undefined,
+    travelerCount:
+      typeof p.travelerCount === 'number' && Number.isInteger(p.travelerCount) && p.travelerCount >= 1 && p.travelerCount <= 9
+        ? p.travelerCount
+        : 1,
+    checkedBagCount:
+      typeof p.checkedBagCount === 'number' && Number.isInteger(p.checkedBagCount) && p.checkedBagCount >= 0 && p.checkedBagCount <= 18
+        ? p.checkedBagCount
+        : 0,
+    baggageBenefit:
+      p.baggageBenefit === 'delta_platinum_amex' || p.baggageBenefit === 'delta_platinum_medallion'
+        ? p.baggageBenefit
+        : 'none',
   };
 }
 
@@ -312,16 +337,39 @@ export async function parseFlightQuery(
   let confidence: ParseResponse['confidence'];
   let ambiguities: ParseAmbiguity[];
 
+  const expandWithConversationContext = (normalized: ParsedFlightQuery): ParsedFlightQuery => {
+    if (findCityAirportArea(rawInput)) {
+      return expandDestinationForCity(normalized, rawInput);
+    }
+
+    const priorUserMessages = (conversationHistory ?? [])
+      .filter((message) => message.role === 'user')
+      .slice()
+      .reverse();
+    for (const message of priorUserMessages) {
+      const area = findCityAirportArea(message.content);
+      if (!area) continue;
+      const normalizedStillMatchesArea = normalized.destinations.some((destination) =>
+        area.airports.some((airport) => airport.code === destination.code)
+      );
+      if (normalizedStillMatchesArea) {
+        return expandDestinationForCity(normalized, area.city);
+      }
+    }
+
+    return normalized;
+  };
+
   if ('confidence' in raw && 'parsed' in raw) {
     // New envelope format
     const rawParsed = raw.parsed as Record<string, unknown> | null;
-    parsed = rawParsed ? normalizeAirports(rawParsed) : null;
+    parsed = rawParsed ? expandWithConversationContext(normalizeAirports(rawParsed)) : null;
     confidence = (raw.confidence as string) === 'high' ? 'high'
       : (raw.confidence as string) === 'medium' ? 'medium' : 'low';
     ambiguities = Array.isArray(raw.ambiguities) ? raw.ambiguities as ParseAmbiguity[] : [];
   } else {
     // Legacy flat format — treat as high confidence
-    parsed = normalizeAirports(raw);
+    parsed = expandWithConversationContext(normalizeAirports(raw));
     confidence = 'high';
     ambiguities = [];
   }

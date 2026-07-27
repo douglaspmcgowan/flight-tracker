@@ -1,0 +1,31 @@
+# Work queue
+
+- [x] Verify the cash-fare tracker, fast-flights sidecar, production build, and date display.
+- [x] Audit Phase 3–4 gaps against the original award/alerting plan.
+- [x] Add Prisma persistence and API routes for award searches and award snapshots.
+- [x] Build and test Simple and Analyst award-search modes.
+- [x] Add award availability alerts, dedupe, and scheduler integration.
+- [x] Replace IBM Plex Mono in ordinary metadata and add the durable typography rule.
+- [x] Provision and migrate managed PostgreSQL.
+- [x] Deploy and verify the independent fast-flights worker.
+- [x] Configure Redis coordination and an ntfy notification path.
+- [x] Replace the marketing-mode production surface with the authenticated combined application.
+- [x] Repair and prove the live cash-search fallback in Vercel.
+- [x] Verify cash tracking, award search, Analyst comparison, alerts, settings, scheduling, and authentication through the assembled automated suite and production infrastructure smokes.
+- [x] Run full CI, build, dependency/security review, and adversarial browser verification.
+- [x] Promote the verified build and refresh the durable brief, STATUS, and LOG.
+- [x] Add Berkeley destination expansion across OAK and SFO.
+- [x] Add first-class traveler and checked-bag parameters, including a two-traveler/four-bag trip profile.
+- [x] Add editable Delta SkyMiles Platinum AmEx and Platinum Medallion benefit presets.
+- [x] Calculate and rank estimated total trip cost from airfare plus round-trip checked-bag charges.
+- [x] Add a maximum-stops control for the requested one-or-two-stop constraint.
+- [x] Add unit, API, and Playwright coverage for Norfolk to Berkeley, August 14–17, 2026.
+- [x] Make the total-cost winner identifiable and bookable from the comparison.
+- [x] Preserve flight identity and timing when selected preview flights become persisted snapshots.
+- [x] Make OAK/SFO sibling tracker creation atomic.
+- [x] Keep immediate post-create scraping alive through the Vercel function lifecycle.
+- [x] Scope Berkeley natural-language expansion to the current destination request.
+- [x] Model return-date applicability for date-bounded baggage fees.
+- [x] Add an integrated persistence, tracker-rendering, ranking, edit-cascade, and booking E2E/API path.
+- [ ] Mark the stale pre-infrastructure handoff as superseded and reconcile the deployed source with Git.
+- [?] Complete the final authenticated walkthrough in the deployed UI after Douglas enters the app admin password in the open tab.

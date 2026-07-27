@@ -4,6 +4,10 @@ import { apiSuccess, apiError } from '@/lib/api-response';
 import { runScrapeAll, cleanupUnvisitedQueries } from '@/lib/scraper/run-scrape';
 import { expireDepartedQueries } from '@/lib/scraper/expire-queries';
 import { notifyNewLows } from '@/lib/notifications/run';
+import { runAwardSearchAll } from '@/lib/award/run-award-search';
+import { notifyAlertRules } from '@/lib/notifications/rules';
+
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
@@ -43,6 +47,15 @@ export async function GET(request: NextRequest) {
     throw err;
   }
 
+  let awardResults: Awaited<ReturnType<typeof runAwardSearchAll>> = [];
+  let alertRuleOutcomes = { evaluated: 0, sent: 0 };
+  try {
+    awardResults = await runAwardSearchAll();
+    alertRuleOutcomes = await notifyAlertRules();
+  } catch (err) {
+    console.error(`[award] cron award pass failed: ${err instanceof Error ? err.message : err}`);
+  }
+
   // Fire new-low alerts for queries that produced fresh prices this cycle.
   // Isolated so notification failures never fail the cron run.
   try {
@@ -61,6 +74,12 @@ export async function GET(request: NextRequest) {
     failed: results.filter((r) => r.status === 'failed').length,
     totalSnapshots: results.reduce((sum, r) => sum + r.snapshotsCount, 0),
     totalCost: results.reduce((sum, r) => sum + r.extractionCost, 0),
+    awardSearches: {
+      processed: awardResults.length,
+      successful: awardResults.filter((result) => result.status === 'success').length,
+      snapshots: awardResults.reduce((sum, result) => sum + result.snapshotsCount, 0),
+    },
+    alertRules: alertRuleOutcomes,
     results,
   };
 
