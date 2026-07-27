@@ -27,5 +27,6 @@
 - [x] Scope Berkeley natural-language expansion to the current destination request.
 - [x] Model return-date applicability for date-bounded baggage fees.
 - [x] Add an integrated persistence, tracker-rendering, ranking, edit-cascade, and booking E2E/API path.
-- [ ] Mark the stale pre-infrastructure handoff as superseded and reconcile the deployed source with Git.
+- [x] Mark the stale pre-infrastructure handoff as superseded and record the deployed source in local Git commit `8883dff`.
+- [?] Push the release after Douglas supplies or approves a user-owned Git remote; the configured upstream remote failed the external-destination safety gate.
 - [?] Complete the final authenticated walkthrough in the deployed UI after Douglas enters the app admin password in the open tab.

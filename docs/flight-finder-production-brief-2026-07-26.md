@@ -110,7 +110,7 @@ The production stack contains:
 3. Watch the first complete scheduled cash refresh in production and confirm the provider returns usable fares for the requested dates.
 4. Expand the verified baggage source table when another carrier or travel period matters.
 5. Resolve the upstream dependency advisories through a tested dependency-upgrade branch.
-6. Push the local release commit to a repository Douglas can administer; the configured `origin` points to the upstream `affromero/flight-finder` repository.
+6. Push local release commit `8883dff` to a repository Douglas can administer. The configured `origin` points to `affromero/flight-finder`, and the external-destination safety gate rejected that push.
 
 ## Exact Berkeley workflow
 

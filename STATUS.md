@@ -32,6 +32,7 @@
 - Production smoke passed database, Chromium, sanitation, and write/read checks.
 - Production health reports database and Redis connected.
 - Critical production dependency audit gate passed; 9 lower-severity production advisories remain.
+- Release source is preserved in local Git commit `8883dff`.
 
 ## Open
 
@@ -39,4 +40,4 @@
 - Live seats.aero results require a provider API key.
 - Google Flights collection remains subject to provider challenges and empty responses.
 - Transitive dependency advisories need an isolated upgrade branch.
-- The release source needs a local commit and a user-owned Git remote before it can be pushed safely.
+- The release needs a user-owned Git remote before it can be pushed safely; the configured `affromero/flight-finder` destination was rejected by the external-write safety gate.

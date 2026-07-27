@@ -16,7 +16,7 @@ Goal: Complete the final authenticated production walkthrough of the combined Fl
 
 ## Remaining
 
-1. Record the release source in Git and push it to a user-owned remote.
+1. Douglas supplies or approves a user-owned Git remote for commit `8883dff`.
 2. Douglas enters the Flight Finder admin password in the open production tab.
 3. Run the authenticated production walkthrough and close the final queue item.
 
