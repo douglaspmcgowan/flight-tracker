@@ -40,3 +40,11 @@
 - Automatic Git deployment remains disconnected because the Vercel account cannot administer the upstream repository.
 - Vercel's install audit reported 14 dependency findings, including 9 high severity.
 - Full architecture and deployment brief: `C:\Users\dougl\projects\base-flight-finder\docs\flight-finder-handoff-2026-07-26.md`.
+
+## Coordination repository — 2026-07-29
+
+- Public authority: `https://github.com/douglaspmcgowan/flight-tracker`.
+- The repository contains the portable agent contract, durable coordination documents, research, and pinned fast-flights sidecar source.
+- Generated environments, Python caches, runtime logs, hook task state, and local environment files are excluded. `.env.example` is the value-free portable-baseline exception.
+- The Flight Finder application remains in the separate `C:\Users\dougl\projects\base-flight-finder` repository.
+- GitHub Actions verify Python 3.12 compilation, pinned dependency installation, the publication boundary, Gitleaks, and dependency-graph submission.

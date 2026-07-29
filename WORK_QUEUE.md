@@ -38,9 +38,9 @@
 
 ## Repository publication — 2026-07-29
 
-- [~] Initialize the coordination folder as a standalone Git repository and install the shared project contract.
-- [ ] Define and verify the public tracking boundary, ignore generated/runtime files, and pin sidecar dependencies.
-- [ ] Repair stale OneDrive paths to the current coordination and application repositories.
-- [ ] Run project-state, Python compilation, whitespace, and redacted Gitleaks verification.
-- [ ] Publish `douglaspmcgowan/flight-tracker` on `master` with topic `agent-project`.
-- [ ] Verify a disposable clone contains every required durable file and no excluded files.
+- [x] Initialize the coordination folder as a standalone Git repository and install the shared project contract.
+- [x] Define and verify the public tracking boundary, ignore generated/runtime files, and pin sidecar dependencies.
+- [x] Repair stale OneDrive paths to the current coordination and application repositories.
+- [x] Run project-state, Python compilation, whitespace, and redacted Gitleaks verification.
+- [x] Publish `douglaspmcgowan/flight-tracker` on `master` with topic `agent-project`.
+- [x] Verify a disposable clone contains every required durable file and no excluded files.

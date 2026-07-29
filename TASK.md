@@ -6,16 +6,20 @@ Publish the Flight Tracker coordination repository with its portable project con
 
 ## Queue
 
-- [~] Complete local project, security, and repository-boundary verification.
-- [ ] Publish `douglaspmcgowan/flight-tracker` from `master` with the `agent-project` topic.
-- [ ] Verify the pushed repository in a disposable clone and confirm the GitHub Actions checks.
+- [x] Complete local project, security, and repository-boundary verification.
+- [x] Publish `douglaspmcgowan/flight-tracker` from `master` with the `agent-project` topic.
+- [x] Verify the pushed repository in a disposable clone and confirm the GitHub Actions checks.
 
-## Blocked
+## Completed
 
-- Local Python compilation is unavailable because the previous Python 3.12 installation was removed. The repository workflow runs the required Python 3.12 compilation on GitHub.
+- Created the public repository at `https://github.com/douglaspmcgowan/flight-tracker`.
+- Published the portable project contract, durable coordination documents, research, and pinned sidecar source.
+- Verified the project contract, redacted Gitleaks scan, whitespace, exclusion boundary, disposable clone, and Python 3.12 compilation workflow.
 
 ## Verification
 
 - Publication-boundary preflight observed failing before implementation and passing afterward.
-- Run `C:\Users\dougl\.agents\tools\Test-AgentProjectState.cmd -Repository .`.
-- Run redacted Gitleaks, staged whitespace checks, remote workflow checks, and disposable-clone verification.
+- `C:\Users\dougl\.agents\tools\Test-AgentProjectState.cmd -Repository .` passed.
+- Redacted Gitleaks found no leaks.
+- The disposable clone contained 34 tracked files and zero excluded paths.
+- GitHub Actions `verify`, `gitleaks`, and `Dependency Graph` completed successfully for the initial publication commit.
