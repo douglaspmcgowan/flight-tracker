@@ -1,0 +1,8 @@
+---
+description: Load the portable repository contract
+alwaysApply: true
+---
+
+Read and follow repository-root `AGENTS.md`.
+
+Before work, read `TASK.md`, `STATUS.md`, and recent `LOG.md`. Read `MAP.md` for architecture or path questions, `DESIGN.md` for interface work, and `PRODUCT.md` when present.

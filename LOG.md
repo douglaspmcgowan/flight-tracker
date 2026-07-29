@@ -1,0 +1,8 @@
+# LOG
+
+2026-07-24 | Verified production build, live sidecar data, root start command, and tracker page; added integration/regression tests; fixed tracker-date timezone display; enabled built-in cron configuration; refreshed brief and runbook.
+2026-07-24 | Added award persistence, APIs, scheduled search pass, and unified alert rules; refreshed generated Prisma client; full suite passed (1,362 passed, 2 skipped); verified safe local dev preview on :3004; recorded OneDrive lock on production build output.
+2026-07-24 | Isolated Next output in `.next-local`, completed an optimized production build, restarted :3003, and verified health, sidecar, and award-search API responses.
+2026-07-25 | Added the existing-app `/awards` workspace with Simple and Analyst comparisons, cash/CPP matching, navigation, attribution, responsive behavior, provider recovery, and valid alert deep links; saved the ORF-OAK Aug 14–17 search; completed Impeccable review and 1,419-test/build verification.
+2026-07-25 | Ran Impeccable Typeset and Layout on `/awards`; moved the saved route and mode controls into the route-first tracker hierarchy, matched the 900px cash shell, strengthened tablet/mobile adaptation, repaired shared font delivery, rebuilt production, and reopened the verified preview on :3003.
+2026-07-26 | Replaced IBM Plex Mono with Outfit and Geist Mono under a durable policy test and global harness rule; passed 1,420 tests plus lint, typecheck, web build, CLI bundle, and responsive browser checks; deployed a Ready Vercel production build and documented its managed-database and worker requirements.

@@ -1,0 +1,35 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repository:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned sidecar dependencies
+        run: python -m pip install -r fast-flights-sidecar/requirements.txt
+      - name: Compile sidecar sources
+        run: python -m py_compile fast-flights-sidecar/catcher.py fast-flights-sidecar/main.py fast-flights-sidecar/probe.py
+      - name: Verify publication boundary
+        shell: pwsh
+        run: |
+          $blocked = git ls-files | Where-Object {
+            $_ -match '(^|/)(venv|__pycache__|taskstate)(/|$)' -or
+            $_ -match '\.pyc$' -or
+            $_ -match 'runtime\.(out|err)\.log$' -or
+            ($_ -match '(^|/)\.env($|\.)' -and $_ -ne '.env.example')
+          }
+          if ($blocked) {
+            $blocked | ForEach-Object { Write-Error "Excluded path is tracked: $_" }
+            exit 1
+          }

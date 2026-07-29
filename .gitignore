@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+*.pyo
+
+fast-flights-sidecar/venv/
+fast-flights-sidecar/runtime.out.log
+fast-flights-sidecar/runtime.err.log
+
+taskstate/

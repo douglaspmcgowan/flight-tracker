@@ -1,0 +1,120 @@
+{
+    "schemaVersion":  2,
+    "project":  "flight-tracker",
+    "bindings":  [
+                     {
+                         "capability":  "deep-search",
+                         "canonical":  [
+                                           "deep-search"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "recon",
+                         "canonical":  [
+                                           "source-command-recon"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "ultra-skill",
+                         "canonical":  [
+                                           "source-command-ultra-skill"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "task-design",
+                         "canonical":  [
+                                           "source-command-task",
+                                           "source-command-design"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "engineering-workflow",
+                         "canonical":  [
+                                           "source-command-brainstorming",
+                                           "source-command-systematic-debugging",
+                                           "source-command-test-driven-development",
+                                           "source-command-requesting-code-review",
+                                           "source-command-verification-before-completion"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "interface-workflow",
+                         "canonical":  [
+                                           "impeccable"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "parallel-work",
+                         "canonical":  [
+                                           "parallelize"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "design-review",
+                         "canonical":  [
+                                           "source-command-design-review"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "docket",
+                         "canonical":  [
+                                           "source-command-docket"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "harden-tail",
+                         "canonical":  [
+                                           "source-command-pathway",
+                                           "source-command-solo-review",
+                                           "source-command-probe",
+                                           "source-command-hone",
+                                           "source-command-spar"
+                                       ],
+                         "chain":  "harden-tail",
+                         "steps":  [
+                                       "solo-review",
+                                       "probe",
+                                       "hone",
+                                       "spar"
+                                   ],
+                         "delivery":  "pathway"
+                     },
+                     {
+                         "capability":  "probe",
+                         "canonical":  [
+                                           "source-command-probe"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "spar",
+                         "canonical":  [
+                                           "source-command-spar"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "spec",
+                         "canonical":  [
+                                           "source-command-spec"
+                                       ],
+                         "delivery":  "vendored"
+                     },
+                     {
+                         "capability":  "correct",
+                         "canonical":  [
+                                           "correct"
+                                       ],
+                         "delivery":  "vendored"
+                     }
+                 ]
+}
