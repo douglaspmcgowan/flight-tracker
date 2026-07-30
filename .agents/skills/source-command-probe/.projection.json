@@ -1,0 +1,6 @@
+{
+    "schemaVersion":  1,
+    "name":  "source-command-probe",
+    "source":  "C:\\tmp\\agent-harness-google-drive-account-root\\.agents\\skills\\source-command-probe",
+    "sha256":  "a6e71266f35e1c259ea718089c96710de4edc42cf59f9f3275c1686b28c81222"
+}

@@ -1,0 +1,6 @@
+{
+    "schemaVersion":  1,
+    "name":  "source-command-recon",
+    "source":  "C:\\tmp\\agent-harness-google-drive-account-root\\.agents\\skills\\source-command-recon",
+    "sha256":  "fc7f5753c16164de3877a7b8dfb746413fdb553142f672080a0bbe0ca863337d"
+}

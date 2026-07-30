@@ -1,0 +1,6 @@
+{
+    "schemaVersion":  1,
+    "name":  "source-command-task",
+    "source":  "C:\\tmp\\agent-harness-google-drive-account-root\\.agents\\skills\\source-command-task",
+    "sha256":  "85ccfd9f5543f766ecfd3c7866feca0623de883e9738e00261eca6d008548583"
+}

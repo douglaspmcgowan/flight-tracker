@@ -48,3 +48,10 @@
 - Generated environments, Python caches, runtime logs, hook task state, and local environment files are excluded. `.env.example` is the value-free portable-baseline exception.
 - The Flight Finder application remains in the separate `C:\Users\dougl\projects\base-flight-finder` repository.
 - GitHub Actions verify Python 3.12 compilation, pinned dependency installation, the publication boundary, Gitleaks, and dependency-graph submission.
+
+## Harness v3 onboarding — 2026-07-30
+
+- Harness v3 onboarding is prepared and verified in the isolated `codex/harness-v3-onboarding-2` worktree; stable `master` remains unchanged pending review.
+- Legacy root task files were preserved under `.agents/archive/pre-harness-v3/`, and every actionable item was reconciled into `TASK.md` with provenance.
+- Pushed manager sync and verification, the installed project verifier, whitespace validation, and Git/history secret scans pass.
+- Sidecar syntax compiles with the installed Python 3.14 runtime. Python 3.12 is not installed locally; the repository CI remains the authority for the exact 3.12 target.

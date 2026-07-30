@@ -7,8 +7,7 @@
 | `AGENTS.md` | Portable project behavior |
 | `CLAUDE.md` | Claude import |
 | `.cursor/rules/00-project-contract.mdc` | Cursor project pointer |
-| `CURRENT-TASK.md` | Active goal, completed evidence, remaining steps, next verifier |
-| `WORK_QUEUE.md` | Actionable work queue |
+| `TASK.md` | Active goal, queue, blockers, decisions, completed evidence, and next verifier |
 | `STATUS.md` | Durable capability state |
 | `LOG.md` | Append-only completed work |
 | `BACKBURNER.md` | Parked work |
@@ -17,6 +16,9 @@
 | `PRODUCT.md` | Optional product intent |
 | `MEMORY.md` | Lean durable-reference index |
 | `skills-manifest.json` | Canonical skill bindings |
+| `data-manifest.yaml` | External-data authorities, adapters, and restore rules |
+| `secret-manifest.json` | Value-free secret inventory and trust boundaries |
+| `.agents/archive/pre-harness-v3/` | Read-only provenance for retired task-state files |
 
 ## Architecture
 

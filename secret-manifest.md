@@ -6,7 +6,7 @@ This generated view contains variable names and operating metadata only. Secret 
 
 | Variable | Purpose | Provider | Trust boundary | Owner | Rotation | Consumers | Status |
 |---|---|---|---|---|---|---|---|
-| `PROJECT_DATA_ROOT` | TODO: classify | Bitwarden Secrets Manager or deployment platform | development | Douglas | on compromise, ownership change, or provider policy |  | needs-classification |
+| `PROJECT_DATA_ROOT` | Non-secret filesystem path for external mutable project data | local filesystem | development | Douglas | N/A |  | non-secret |
 
 Canonical source: `secret-manifest.json`
 Refresh: `C:\Users\dougl\.agents\tools\Update-SecretManifest.cmd -Repository <repo>`
