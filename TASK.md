@@ -1,5 +1,11 @@
 # Task
 
+Checkbox markers are read by the Stop hook (`~/.agents/hooks/lib/task-state.js`):
+`- [ ]` and `- [~]` are **actionable** and will keep an agent working; `- [!]`
+(blocked) and `- [?]` (awaiting a human decision) are **parked** and allow a stop;
+`- [x]` is complete. Use `[!]` or `[?]` for anything an agent cannot finish on its
+own, otherwise the session cannot close.
+
 ## Goal
 
 Close the open Flight Finder work: resolve the phantom release commit, settle the
@@ -9,18 +15,22 @@ the push.
 
 ## Active
 
-- [ ] Nothing is actively in progress. The remaining work is either blocked on a reachable database or waiting on Douglas.
+Nothing is actively in progress. Every remaining item is either blocked on a
+reachable database or gated on Douglas's authorization, so there is no agent work
+left to pick up.
 
 ## Blocked
 
-- [ ] Confirm, export and delete the duplicate ORF–OAK tracker row, then apply migration `20260806120000_add_tracker_route_uniqueness`. **Blocked:** no database is reachable from this machine — nothing listening on 5432, Docker Desktop absent, Doppler CLI absent. Run `scripts/resolve-duplicate-trackers.mjs --report` against the database the deployed app uses.
-- [ ] Re-run the Playwright end-to-end suite. **Blocked by the same cause:** `apps/web/scripts/run-e2e.mjs` executes `npm run db:migrate` first and exits without a live `DATABASE_URL`. Last real run was 2026-07-26.
+- [!] Confirm, export and delete the duplicate ORF–OAK tracker row, then apply migration `20260806120000_add_tracker_route_uniqueness`. **Blocked:** no database is reachable from this machine — nothing listening on 5432, Docker Desktop absent, Doppler CLI absent. Run `scripts/resolve-duplicate-trackers.mjs --report` against the database the deployed app uses.
+- [!] Re-run the Playwright end-to-end suite. **Blocked by the same cause:** `apps/web/scripts/run-e2e.mjs` executes `npm run db:migrate` first and exits without a live `DATABASE_URL`. Last real run was 2026-07-26.
+- [!] Explain `cron.lastScrape: null` in production health. Needs Vercel or database access to distinguish "never ran" from "not recorded".
 
 ## Needs decision
 
-- [ ] **Create `douglaspmcgowan/flight-finder` and push `master`.** Publishing needs Douglas's explicit authorization. Local half is done and `gh auth status` confirms he is logged in with `repo` scope; commands are ready in `base-flight-finder/docs/fork-ownership-runbook.md`. Urgent — `master` is one squashed commit with no remote copy anywhere.
-- [ ] **Enter the admin password and run the authenticated walkthrough** in `base-flight-finder/docs/authenticated-walkthrough-2026-08-06.md`. Step 3 settles whether the duplicate tracker is live in production.
-- [ ] **Decide whether to push the 51 upstream tags** (`v0.1.0`…`v0.13.2`, `desktop-v0.13.1`). They belong to affromero's release line; the runbook pushes `master` only.
+- [?] **Create `douglaspmcgowan/flight-finder` and push `master`.** Publishing needs Douglas's explicit authorization. Local half is done and `gh auth status` confirms he is logged in with `repo` scope; commands are ready in `base-flight-finder/docs/fork-ownership-runbook.md`. Urgent — `master` is one squashed commit with no remote copy anywhere.
+- [?] **Push the two coordination commits** `1ada9f3` and `3ffc0de` from this repository. Awaiting the same publishing authorization.
+- [?] **Enter the admin password and run the authenticated walkthrough** in `base-flight-finder/docs/authenticated-walkthrough-2026-08-06.md`. Step 3 settles whether the duplicate tracker is live in production.
+- [?] **Decide whether to push the 51 upstream tags** (`v0.1.0`…`v0.13.2`, `desktop-v0.13.1`). They belong to affromero's release line; the runbook pushes `master` only.
 
 ## Queue
 
