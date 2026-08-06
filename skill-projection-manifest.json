@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-06T02:42:42.8136410Z",
+  "entries": [
+    {
+      "name": "correct",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\correct",
+      "sha256": "cab4b981b26f0f2f496a560f1ff7568f0eb052af042a18ab78a6711251c878f5",
+      "status": "current"
+    },
+    {
+      "name": "deep-search",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\deep-search",
+      "sha256": "b6b04f03463bcab001e539300babdd484c725484c415084f002b03d77e1ba5ed",
+      "status": "current"
+    },
+    {
+      "name": "impeccable",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\impeccable",
+      "sha256": "0e6b5a98009f3bd352621ae357488beee0a4789b65672e5ab2e3b900cae4b9a5",
+      "status": "current"
+    },
+    {
+      "name": "parallelize",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\parallelize",
+      "sha256": "7af1048b66a52a94e0aff490c10847f19a341674e74b72b7a2ad69dc7119a4f8",
+      "status": "current"
+    },
+    {
+      "name": "source-command-brainstorming",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-brainstorming",
+      "sha256": "86ce77d413fe8014e7686736c4808573d25465d06e5f503e6f44604764a238fc",
+      "status": "current"
+    },
+    {
+      "name": "source-command-design",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-design",
+      "sha256": "6175744f095096e8ca4f4f7c4c66cc9268885336c2675c84381588e1c3219683",
+      "status": "current"
+    },
+    {
+      "name": "source-command-design-review",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-design-review",
+      "sha256": "8da3e32b25f2630839aa81e9fc095082bda68d0489e904a9516f5f367a040a22",
+      "status": "current"
+    },
+    {
+      "name": "source-command-docket",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-docket",
+      "sha256": "6479bca681a063c59175f4d6902f8921914f3c329b3771a67cf48796788304c5",
+      "status": "current"
+    },
+    {
+      "name": "source-command-probe",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-probe",
+      "sha256": "a6e71266f35e1c259ea718089c96710de4edc42cf59f9f3275c1686b28c81222",
+      "status": "current"
+    },
+    {
+      "name": "source-command-recon",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-recon",
+      "sha256": "fc7f5753c16164de3877a7b8dfb746413fdb553142f672080a0bbe0ca863337d",
+      "status": "current"
+    },
+    {
+      "name": "source-command-requesting-code-review",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-requesting-code-review",
+      "sha256": "1ecbb0845733474572b536ebae45ded669233ac1450b6b8c3b8c385558d01ec6",
+      "status": "current"
+    },
+    {
+      "name": "source-command-spar",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-spar",
+      "sha256": "4242fa837032e3769cbcdb0f4525affd733924a1a761b4ff7eae4261ab0fd0eb",
+      "status": "current"
+    },
+    {
+      "name": "source-command-spec",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-spec",
+      "sha256": "75f53057820655fdd4bacba0c51ba5b436d5857112d66149773ce0acad6c41a3",
+      "status": "current"
+    },
+    {
+      "name": "source-command-systematic-debugging",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-systematic-debugging",
+      "sha256": "8012e350a7b02e32396ce9da77b55e2e444495d4bda4d38c82d1ff18899699fa",
+      "status": "current"
+    },
+    {
+      "name": "source-command-task",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-task",
+      "sha256": "4081772ec09dcd7c7a3b9db26e68599df74bda1366b1d9fe30e155c05c7f5d3a",
+      "status": "current"
+    },
+    {
+      "name": "source-command-test-driven-development",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-test-driven-development",
+      "sha256": "9f0112b76dee9f05fdf2083b3be1dc3c9ee3ba1319d06d1987bd083942f00734",
+      "status": "current"
+    },
+    {
+      "name": "source-command-ultra-skill",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-ultra-skill",
+      "sha256": "e2d7b4544d06389d013ae7808580642e62547f35c48981f762aec378e8957171",
+      "status": "current"
+    },
+    {
+      "name": "source-command-verification-before-completion",
+      "source": "C:\\Users\\dougl\\.agents\\skills\\source-command-verification-before-completion",
+      "sha256": "bd1b1a2a6d87041d066c36dc2d95d335d499b6badcefcca5bac42f0a1a3d065d",
+      "status": "current"
+    }
+  ]
+}
