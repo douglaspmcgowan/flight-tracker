@@ -53,8 +53,12 @@ Concrete things to reach for — animation packages and working skeletons, icon 
 - **Type** `~/.agents/design/type/families.md`
 - **Design systems** `~/.agents/design/systems/install.md` and `sources.md`
 - **Design languages** `~/.agents/design/languages/registry.md` — read it before committing a visual world or generating a new design language, and register the world committed for this project there in the same work unit
+- **Surface craft** `~/.agents/design/craft/` — high-end surface construction, building faithfully from a reference image, device mockups
+- **Pre-ship matrix** `~/.agents/design/preflight.md` — the mechanical finish check for landing, marketing and portfolio surfaces; not dashboards, not product UI
 
 The full universal rules are `~/.agents/DESIGN.md`. Where a library entry and a rule disagree, the rule wins.
+
+**This list is enumerated because it has to be.** A cloud or container session has no `~/.agents` to walk, so this block is the only routing it gets — which also means a leaf missing here is a leaf that session cannot reach at all. `craft/` and `preflight.md` were absent until 2026-08-07 and every project copy inherited the gap. `Test-DesignLibraryIndex.ps1` now fails the build when this list falls behind the tree.
 <!-- agent-harness:universal-design:v1:end -->
 
 # Design record
