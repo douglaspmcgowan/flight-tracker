@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work Scope"
+  short_description: "Control scoped work and verified transitions"
+  default_prompt: "Use $work-scope to inspect the active scope cell and choose the next verified transition."

@@ -109,7 +109,7 @@ try {
     $safeHash = @{}
     foreach ($entry in $base.GetEnumerator()) { $safeHash[$entry.Key] = $entry.Value }
     $safeHash.Id = 'correction-20260729-safe-hash'
-    $safeHash.Evidence = @('sha256: ' + ('a' * 64), 'source-command-verification-before-completion')
+    $safeHash.Evidence = @('sha256: ' + ('a' * 64), 'verification-before-completion')
     & $script @safeHash | Out-Null
 
     Write-Output 'Correction skill tests passed.'

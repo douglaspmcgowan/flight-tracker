@@ -1,12 +1,27 @@
-# LOG
+<!-- GENERATED FROM .agents/work/events.jsonl. DO NOT EDIT DIRECTLY. -->
+# Work log
 
-2026-07-24 | Verified production build, live sidecar data, root start command, and tracker page; added integration/regression tests; fixed tracker-date timezone display; enabled built-in cron configuration; refreshed brief and runbook.
-2026-07-24 | Added award persistence, APIs, scheduled search pass, and unified alert rules; refreshed generated Prisma client; full suite passed (1,362 passed, 2 skipped); verified safe local dev preview on :3004; recorded OneDrive lock on production build output.
-2026-07-24 | Isolated Next output in `.next-local`, completed an optimized production build, restarted :3003, and verified health, sidecar, and award-search API responses.
-2026-07-25 | Added the existing-app `/awards` workspace with Simple and Analyst comparisons, cash/CPP matching, navigation, attribution, responsive behavior, provider recovery, and valid alert deep links; saved the ORF-OAK Aug 14–17 search; completed Impeccable review and 1,419-test/build verification.
-2026-07-25 | Ran Impeccable Typeset and Layout on `/awards`; moved the saved route and mode controls into the route-first tracker hierarchy, matched the 900px cash shell, strengthened tablet/mobile adaptation, repaired shared font delivery, rebuilt production, and reopened the verified preview on :3003.
-2026-07-26 | Replaced IBM Plex Mono with Outfit and Geist Mono under a durable policy test and global harness rule; passed 1,420 tests plus lint, typecheck, web build, CLI bundle, and responsive browser checks; deployed a Ready Vercel production build and documented its managed-database and worker requirements.
-2026-07-29 | Published the Flight Tracker coordination repository with its portable project contract, repaired local paths, pinned sidecar dependencies, exclusion guards, redacted Gitleaks checks, successful Python 3.12 CI compilation, and disposable-clone verification.
-2026-08-06 | Resolved the phantom release commit 8883dff (absent; root cause is a squashing bundle snapshot, content survives at cabc7ec, history does not) and corrected all five asserting documents; settled five conflicting test counts by running the suite (1,483 passed, 2 skipped); added the tracker uniqueness constraint with a NULLS NOT DISTINCT index, a preflight-guarded migration, a duplicate-resolution script and 5 regression tests; prepared the fork-ownership move to the push gate without pushing; re-verified production health; updated the four vault brief docs at BROKEN=0.
-2026-07-26 | Vercel's install audit reported 14 dependency findings, including 9 high severity, on the Ready production build.
-2026-08-06 | Folded STATUS.md into MAP.md's State section and this log per decision; removed STATUS.md.
+- - 08/08/2026 02:52:04 [project_initialized] cell=handoff-completion@D0 event=6ea7c324-0a41-4487-965b-3194eceb712c
+- - 08/08/2026 02:52:09 [project_remote_bound] cell=handoff-completion@D0 event=e98bcbb5-98b1-468e-8ffe-a9eb8f6120be
+- - 08/08/2026 02:54:51 [task_added] cell=handoff-completion@D0 event=5f1f0ce1-6f64-43e8-bba7-f161e2782520
+- - 08/08/2026 02:55:25 [verification_executed] cell=handoff-completion@D0 event=25ea65c3-d6f4-4ccf-80fd-403f5b24af47
+- - 08/08/2026 02:55:27 [task_completed] cell=handoff-completion@D0 event=bb14b59a-4084-48c4-9e82-760dbc318084
+- - 08/08/2026 02:55:59 [scope_cell_closed] cell=handoff-completion@D0 event=52f6e1fc-654c-4c5b-9db5-03e3f7218f92
+- - 08/08/2026 02:56:01 [drilldown_opened] cell=handoff-completion@D1 event=0b0eae69-1eb4-40f6-be6f-573839af216d
+- - 08/08/2026 02:57:26 [task_added] cell=handoff-completion@D1 event=b59a52c1-09ad-40f9-8957-f165def2e871
+- - 08/08/2026 03:44:24 [verification_executed] cell=handoff-completion@D1 event=e5e18a5e-93a0-46f2-949b-6851efa0040c
+- - 08/08/2026 03:45:29 [discovery_captured] cell=handoff-completion@D1 event=ccc3344e-bc3c-4bfc-a475-27567c53f8c6
+- - 08/08/2026 04:15:29 [verification_executed] cell=handoff-completion@D1 event=00f6625e-476f-43ed-9940-dcf6c0d82f5d
+- - 08/08/2026 04:15:55 [task_retired] cell=handoff-completion@D1 event=1836062e-a238-4bd0-aeb7-1be43887def9
+- - 08/08/2026 04:16:01 [task_added] cell=handoff-completion@D1 event=6658a56b-87ab-4f18-b246-ce96600e6c74
+- - 08/08/2026 04:16:30 [verification_executed] cell=handoff-completion@D1 event=7da42ee7-fb9c-4a50-8bc4-f129195f1939
+- - 08/08/2026 04:16:47 [task_completed] cell=handoff-completion@D1 event=15b71c97-b80a-4e4f-bf82-ac320d0704f5
+- - 08/08/2026 04:17:06 [discovery_disposition] cell=handoff-completion@D1 event=f51dc9b7-9496-40d4-988f-353145dcdfc2
+- - 08/08/2026 04:17:41 [task_retired] cell=handoff-completion@D1 event=4a743957-45e0-48d8-844d-f8dd52a37a4c
+- - 08/08/2026 04:17:55 [scope_cell_closed] cell=handoff-completion@D1 event=dca392ca-5c8b-4046-9c55-1372f5a99988
+- - 08/08/2026 04:18:10 [drilldown_opened] cell=handoff-completion@D2 event=704f9b07-de77-4cb3-b938-121f91eef32d
+- - 08/08/2026 04:19:07 [task_added] cell=handoff-completion@D2 event=a5a9271e-6f06-42ad-ba8f-a3717e0d26fe
+- - 08/08/2026 04:19:45 [verification_executed] cell=handoff-completion@D2 event=4dfa5de8-f103-4232-bde5-71cdb5d49c49
+- - 08/08/2026 04:20:03 [task_completed] cell=handoff-completion@D2 event=8578d555-3f97-4339-a300-27d70ac4d3a3
+- - 08/08/2026 04:20:19 [scope_cell_closed] cell=handoff-completion@D2 event=216926dd-b403-447d-b404-b96593ba6ff6
+- - 08/08/2026 04:20:34 [frontier_stopped] cell=handoff-completion@D2 event=a5acf002-5293-4cf1-a0c1-e57393e3070c

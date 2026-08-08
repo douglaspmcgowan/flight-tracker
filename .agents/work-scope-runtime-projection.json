@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "owner": "agent-harness/work-scope-runtime/v1",
+  "sourceRoot": "C:\\Users\\dougl\\.agents",
+  "files": [
+    {
+      "path": "assets/schema.json",
+      "sha256": "9b4b74d0c2acf58004cc500b0c563a69347e40c38ec39bad1ed5d84189cfad82"
+    },
+    {
+      "path": "assets/selection-rules.json",
+      "sha256": "a23920dadcb4037577d4cb4be60a680f11144b5bccb16ae5df1ce23ea4f02ba8"
+    },
+    {
+      "path": "tools/WorkScope.psm1",
+      "sha256": "723d5cb90a4a79b931f1a0e2e5f8dc0e46a25a221fa85a3de435f266d1b501ac"
+    },
+    {
+      "path": "tools/Capture-WorkDiscovery.ps1",
+      "sha256": "45761f8207e0ab3609a51737ba0a9bfea735e9038d7418b445bc855ed5e89889"
+    },
+    {
+      "path": "tools/Get-WorkResume.ps1",
+      "sha256": "1a9ce115b4b309ab655d781323a3ef6d8968c864e8d23eb267025f043158b284"
+    },
+    {
+      "path": "tools/Initialize-WorkScope.ps1",
+      "sha256": "b0cfdf1021dcf03e72ce1debab22871fb19a44120971c92792345929d31ca8bf"
+    },
+    {
+      "path": "tools/Invoke-WorkScopeEvidence.ps1",
+      "sha256": "51444446537f86a3362808c9cba991ad52ea8c06849f0e0eafda2fce7ab1672e"
+    },
+    {
+      "path": "tools/New-WorkHandoff.ps1",
+      "sha256": "03a0eef58ad944e377f83aeb69b62da7ea66c8fa287e98c919b0e28d323b2bdd"
+    },
+    {
+      "path": "tools/Reconcile-WorkState.ps1",
+      "sha256": "ec460cbf675d1740a0143e38dfc42cae52950c3621bcae54a3b5347c84848b0f"
+    },
+    {
+      "path": "tools/Render-WorkViews.ps1",
+      "sha256": "47f93f6c5d20f7fe9a6d064cd21da4bcc1e71bbe8fddc892b5c9b9778b4420c9"
+    },
+    {
+      "path": "tools/Select-FrontierWork.ps1",
+      "sha256": "8ec4cd70ff4bc4b601d88316cfa5147af2da46591b90027852f4ae788f7916cf"
+    },
+    {
+      "path": "tools/Set-WorkFrontier.ps1",
+      "sha256": "3a21992c9b243814a15fb8198d7ae2d03e53bb54918a04f78e6d455a3e483fb2"
+    },
+    {
+      "path": "tools/Test-WorkScopeGuard.ps1",
+      "sha256": "49b9bcd8b1eb4ea86620f90294d83d20f7d07c2be99b10f0fa76ad34ed317153"
+    },
+    {
+      "path": "tools/Test-WorkState.ps1",
+      "sha256": "763b29214b9f735a11c7fc587ee0959a3cbc20c883d479d13cf2b5480da7f69c"
+    },
+    {
+      "path": "tools/Update-WorkState.ps1",
+      "sha256": "a0ea857f0e7a6bc5d2674fd1fda073ce200303190d6e4b4012314b4405d251b0"
+    }
+  ]
+}

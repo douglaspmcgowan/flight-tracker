@@ -1,0 +1,5 @@
+param([Parameter(Mandatory)] [string]$Root)
+
+$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'WorkScope.psm1') -Force
+Select-WorkScopeFrontier -Root $Root | ConvertTo-Json -Depth 30

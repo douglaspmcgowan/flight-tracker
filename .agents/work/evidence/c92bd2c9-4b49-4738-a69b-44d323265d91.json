@@ -1,0 +1,42 @@
+{
+  "receipt_id": "c92bd2c9-4b49-4738-a69b-44d323265d91",
+  "check_id": "python-compile",
+  "verifier": "test",
+  "subject": "FT-SIDECAR-VERIFY",
+  "project_id": "flight-tracker",
+  "track_id": "project-operations",
+  "capability_id": "handoff-completion",
+  "cell_id": "handoff-completion@D1",
+  "task_id": "FT-SIDECAR-VERIFY",
+  "result": "fail",
+  "executable": "py.exe",
+  "executable_sha256": "c51dac136d24b196e887e777a0034e971f32ffd7219099ea002f2aaa9243f501",
+  "arguments_sha256": "8a51f603835c4c32b9ff591c4c6577d67d47aa242b6f4d6079825b5acc9ac7ca",
+  "output_sha256": "8749754805f12915346c8a762b9346bf5c0d57dee76083ec8ce05988a6b8b5ac",
+  "output_size_bytes": 224,
+  "timed_out": false,
+  "output_limit_exceeded": false,
+  "timeout_seconds": 120,
+  "max_output_bytes": 1048576,
+  "verifier_inputs": [],
+  "artifacts": [
+    {
+      "reference": "fast-flights-sidecar/catcher.py",
+      "sha256": "e07881928c043d0b22220467c491b580a46e0c1bea115b68b5aee94172712405",
+      "size_bytes": 455
+    },
+    {
+      "reference": "fast-flights-sidecar/main.py",
+      "sha256": "64489fa9a23a430c63fd1707500bb1f2d8441baaf2484cf4c2a95cb8ea1b93d8",
+      "size_bytes": 5913
+    },
+    {
+      "reference": "fast-flights-sidecar/probe.py",
+      "sha256": "358cbdc1abbd0b9c93dacb5aa9a0b79a399e038e3af4672f77f461e22ea40369",
+      "size_bytes": 529
+    }
+  ],
+  "exit_code": 103,
+  "started_at": "2026-08-08T03:44:23.8054228Z",
+  "finished_at": "2026-08-08T03:44:24.1898533Z"
+}

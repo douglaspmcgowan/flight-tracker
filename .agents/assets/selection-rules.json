@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "value_weights": {
+    "high": 3,
+    "medium": 2,
+    "low": 1
+  },
+  "risk_weights": {
+    "high": 3,
+    "medium": 2,
+    "low": 1
+  },
+  "boundary_behavior": {
+    "capability": "same-capability-only",
+    "track": "same-track-only",
+    "project": "same-project-only",
+    "portfolio": "handoff-across-projects",
+    "system": "explicit-declaration-required"
+  },
+  "tie_breaker": "oldest-captured-first"
+}

@@ -1,6 +1,8 @@
 ---
+provenance: "douglas-core"
 name: correct
-description: "Turn Douglas's correction into durable, scoped prevention. Use when he reports an agent mistake, says never to repeat something, asks to remember feedback, invokes /correct, or requests a rule, hook, test, verifier, permission, memory, skill, adapter, or workflow change based on observed behavior."
+description: "Turn a correction from Douglas into durable, scoped prevention: a rule, hook, test, verifier, or permission."
+when_to_use: "Turn Douglas's correction into durable, scoped prevention. Use when he reports an agent mistake, says never to repeat something, asks to remember feedback, invokes /correct, or requests a rule, hook, test, verifier, permission, memory, skill, adapter, or workflow change based on observed behavior."
 ---
 
 # Correct
@@ -9,7 +11,7 @@ Convert an observed failure into value-free evidence, the narrowest supported en
 
 ## Boundaries
 
-Use this skill for a correction or recurrence-prevention request. Use `TASK.md` for unfinished work, `STATUS.md` or `MAP.md` for project facts, and the existing human guide for explanation without enforcement.
+Use this skill for a correction or recurrence-prevention request. Use `TASK.md` for unfinished work, `MAP.md` for project facts and durable capability state, and the existing human guide for explanation without enforcement.
 
 The feedback log records decisions and evidence for audit. It does not teach the procedure and does not load every session.
 
@@ -79,4 +81,4 @@ State what was verified this pass and what remains. Include all created or updat
 
 ## Provenance
 
-This workflow consolidates the former `feedback` skill, `FEEDBACK-ROUTER.md`, and `Record-Feedback.ps1`. The `feedback` skill remains a discovery alias.
+This workflow consolidates the former `feedback` skill, `FEEDBACK-ROUTER.md`, and `Record-Feedback.ps1`. The `feedback` alias package was retired on 2026-08-06 — `correct` is the only surface. Use `scripts/Record-Correction.ps1`; `Record-Feedback.ps1` is superseded and archived.

@@ -1,0 +1,48 @@
+{
+  "receipt_id": "3e112356-826c-4a43-a9fc-d7cedd56d36a",
+  "check_id": "full-project-contract",
+  "verifier": "test",
+  "subject": "FT-FULL-CONTRACT",
+  "project_id": "flight-tracker",
+  "track_id": "project-operations",
+  "capability_id": "handoff-completion",
+  "cell_id": "handoff-completion@D2",
+  "task_id": "FT-FULL-CONTRACT",
+  "result": "pass",
+  "executable": "pwsh.exe",
+  "executable_sha256": "db6dd81183fe57d22e03b911ec9a30a2fd7c40542e97743615355a6fb44f458f",
+  "arguments_sha256": "27cb127dabab008db87cd8e12f51a7d45246ff47cdae28ab9c7448e546efd7c7",
+  "output_sha256": "c26832c60f96577445ea70fbd7e07d7ffbb86868ea9e7d40408485c902c33bf9",
+  "output_size_bytes": 214,
+  "timed_out": false,
+  "output_limit_exceeded": false,
+  "timeout_seconds": 300,
+  "max_output_bytes": 2097152,
+  "verifier_inputs": [
+    {
+      "reference": "scripts/verify-agent-project.ps1",
+      "sha256": "09dfda2282c9b68fd0119ab1a4829324e77ba7d20b2c627d9c12ea25e9dc4738",
+      "size_bytes": 470
+    }
+  ],
+  "artifacts": [
+    {
+      "reference": "MAP.md",
+      "sha256": "218f28ca1a0fce8530cae8470e52593acea8c6f458f906584111b040d8e7ebea",
+      "size_bytes": 8126
+    },
+    {
+      "reference": "scripts/verify-agent-project.ps1",
+      "sha256": "09dfda2282c9b68fd0119ab1a4829324e77ba7d20b2c627d9c12ea25e9dc4738",
+      "size_bytes": 470
+    },
+    {
+      "reference": "skills-manifest.json",
+      "sha256": "99efd0e36f83807f536212cc0cccf0635c32d507d33c096dd831fa70876bca30",
+      "size_bytes": 3143
+    }
+  ],
+  "exit_code": 0,
+  "started_at": "2026-08-08T04:19:41.0114116Z",
+  "finished_at": "2026-08-08T04:19:44.7830137Z"
+}

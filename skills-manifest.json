@@ -35,6 +35,13 @@
       "delivery": "command"
     },
     {
+      "capability": "work-scope",
+      "canonical": [
+        "work-scope"
+      ],
+      "delivery": "vendored"
+    },
+    {
       "capability": "engineering-workflow",
       "canonical": [
         "brainstorming",
@@ -61,7 +68,21 @@
     {
       "capability": "parallel-work",
       "canonical": [
-        "parallelize"
+        "dispatching-parallel-agents"
+      ],
+      "delivery": "vendored"
+    },
+    {
+      "capability": "skill-discovery",
+      "canonical": [
+        "using-superpowers"
+      ],
+      "delivery": "vendored"
+    },
+    {
+      "capability": "skill-authoring",
+      "canonical": [
+        "writing-skills"
       ],
       "delivery": "vendored"
     },

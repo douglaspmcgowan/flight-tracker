@@ -1,6 +1,8 @@
 ---
+provenance: "douglas-core"
 name: deep-search
-description: Multi-step web research with query fan-out, iterative deepening, human-authored sources (Reddit, HN, practitioner blogs), and inline citations. Use when the user asks to "research X", "find everything about Y", "what do people think about Z", or any question needing 3+ sources or subjective judgment.
+description: "Multi-step web research with query fan-out, practitioner sources such as Reddit and HN, and inline citations."
+when_to_use: "Multi-step web research with query fan-out, iterative deepening, human-authored sources (Reddit, HN, practitioner blogs), and inline citations. Use when the user asks to \"research X\", \"find everything about Y\", \"what do people think about Z\", or any question needing 3+ sources or subjective judgment."
 ---
 
 # /deep-search

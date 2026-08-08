@@ -1,0 +1,43 @@
+{
+  "receipt_id": "8b8da8cb-9b93-47c8-b211-e1c1fefdcf0d",
+  "check_id": "test-work-state",
+  "verifier": "test",
+  "subject": "FT-ENROLL-VERIFY",
+  "project_id": "flight-tracker",
+  "track_id": "project-operations",
+  "capability_id": "handoff-completion",
+  "cell_id": "handoff-completion@D0",
+  "task_id": "FT-ENROLL-VERIFY",
+  "result": "pass",
+  "executable": "pwsh.exe",
+  "executable_sha256": "db6dd81183fe57d22e03b911ec9a30a2fd7c40542e97743615355a6fb44f458f",
+  "arguments_sha256": "ee192911ab2b4a5de8a891d5ca4cce3a733640d1a38ff58369ea49994badcd09",
+  "output_sha256": "84174140e72a0744f5f961d3130281a0ef6bde9cf873adac6905d7c6f66d75c1",
+  "output_size_bytes": 40,
+  "timed_out": false,
+  "output_limit_exceeded": false,
+  "timeout_seconds": 180,
+  "max_output_bytes": 1048576,
+  "verifier_inputs": [
+    {
+      "reference": ".agents/tools/Test-WorkState.ps1",
+      "sha256": "763b29214b9f735a11c7fc587ee0959a3cbc20c883d479d13cf2b5480da7f69c",
+      "size_bytes": 266
+    }
+  ],
+  "artifacts": [
+    {
+      "reference": ".agents/harness-provenance.json",
+      "sha256": "b710b475a78a894ddf3473ff5352916dcb365fe86c063f69442202d16a206bc8",
+      "size_bytes": 2536
+    },
+    {
+      "reference": "skills-manifest.json",
+      "sha256": "99efd0e36f83807f536212cc0cccf0635c32d507d33c096dd831fa70876bca30",
+      "size_bytes": 3143
+    }
+  ],
+  "exit_code": 0,
+  "started_at": "2026-08-08T02:55:17.0521906Z",
+  "finished_at": "2026-08-08T02:55:23.7582465Z"
+}

@@ -11,3 +11,7 @@ fast-flights-sidecar/runtime.out.log
 fast-flights-sidecar/runtime.err.log
 
 taskstate/
+
+# Agent task-state runtime locks
+.agents/work/state.lock
+STATUS.md.lock.json

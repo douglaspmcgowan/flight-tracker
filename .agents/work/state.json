@@ -1,0 +1,196 @@
+{
+  "ownership": {
+    "sessions": [
+      {
+        "session_id": "codex-019fdf3d",
+        "track_id": "project-operations",
+        "capability_id": "handoff-completion",
+        "artifacts": []
+      }
+    ]
+  },
+  "updated_at": "2026-08-08T04:20:35.0197880Z",
+  "last_event_hash": "e85af28b602c56d07d74c80bd3d22c1865bd72273192e29c0c4d34a4c6c502ae",
+  "frontier": {
+    "mode": "drilldown",
+    "automatic": true,
+    "depth_ceiling": "D2",
+    "breadth_boundary": "capability",
+    "selection_strategy": "dependency-first",
+    "handoff_independent_tracks": true,
+    "stop_on": [
+      "destructive_action",
+      "external_publish",
+      "unresolved_collision",
+      "missing_credential",
+      "boundary_change"
+    ]
+  },
+  "schema_version": "1.0.0",
+  "last_event_id": "a5acf002-5293-4cf1-a0c1-e57393e3070c",
+  "backburner": [
+    {
+      "id": "python-312-runtime-missing",
+      "title": "Declared sidecar verification requires Python 3.12 but the workstation currently exposes only Python 3.13 and 3.14",
+      "project": "flight-tracker",
+      "suggested_track": "project-operations",
+      "suggested_capability": "handoff-completion",
+      "entry_depth": "D1",
+      "discovered_from": "FT-SIDECAR-VERIFY exact evidence run",
+      "relationship": "prerequisite",
+      "dependencies": [],
+      "blockers": [],
+      "conflicts": [],
+      "value": "high",
+      "risk": "low",
+      "evidence": [
+        {
+          "receipt_id": "23414716-187c-4526-9240-794b4cecd26a",
+          "verifier": "command",
+          "subject": "Python launcher runtime inventory",
+          "result": "verified",
+          "reference": ".agents/work/evidence/c92bd2c9-4b49-4738-a69b-44d323265d91.json",
+          "sha256": "f0b07a12824ede7968fc75b6890ca3b05142a5c13ceee38c30b7d51dadc792ee",
+          "size_bytes": 1511,
+          "captured_at": "2026-08-08T03:45:28.3964882Z"
+        },
+        {
+          "receipt_id": "c641aedb-8cd0-4b4a-8690-5032f01a148f",
+          "verifier": "test",
+          "subject": "Python 3.12 sidecar compile",
+          "result": "pass",
+          "reference": ".agents/work/evidence/51aeb2bb-afa5-4cc1-89f6-ecf848c07299.json",
+          "sha256": "ce9768ac69e8d752e5c3cd481438e1ab50f9c04bf1b0312fafce6ce890213928",
+          "size_bytes": 1523,
+          "captured_at": "2026-08-08T04:17:05.3248159Z"
+        }
+      ],
+      "status": "closed",
+      "captured_at": "2026-08-08T03:45:28.4856942Z"
+    }
+  ],
+  "project": {
+    "id": "flight-tracker",
+    "kind": "coordination",
+    "initiative_id": "flight-finder-coordination",
+    "root": "C:\\Users\\dougl\\Projects\\flight-tracker",
+    "definition_of_done": [
+      "All active-cell tasks are closed with evidence.",
+      "Generated views reconcile with canonical state."
+    ],
+    "remote": "github.com/douglaspmcgowan/flight-tracker"
+  },
+  "active": {
+    "track_id": "project-operations",
+    "capability_id": "handoff-completion",
+    "depth": "D2",
+    "cell_id": "handoff-completion@D2",
+    "status": "closed",
+    "opened_at": "2026-08-08T04:18:08.5773988Z",
+    "closed_at": "2026-08-08T04:20:19.2628712Z",
+    "goal": "Complete and verify Flight Finder handoff completion at D2.",
+    "in_scope": [
+      "handoff-completion"
+    ],
+    "out_of_scope": [],
+    "tasks": [
+      {
+        "id": "FT-FULL-CONTRACT",
+        "title": "Run the existing shared harness verifier through a project-local PowerShell 7 wrapper because the prescribed legacy cmd owner is incompatible with Process.Kill(true)",
+        "acceptance": "The canonical shared harness project verifier exits zero against the enrolled coordination checkout under PowerShell 7.",
+        "acceptance_checks": [
+          {
+            "id": "full-project-contract",
+            "verifier": "test",
+            "executable": "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\\pwsh.exe",
+            "executable_sha256": "db6dd81183fe57d22e03b911ec9a30a2fd7c40542e97743615355a6fb44f458f",
+            "arguments": [
+              "-NoProfile",
+              "-File",
+              "scripts\\verify-agent-project.ps1"
+            ],
+            "arguments_sha256": "27cb127dabab008db87cd8e12f51a7d45246ff47cdae28ab9c7448e546efd7c7",
+            "verifier_inputs": [
+              {
+                "reference": "scripts/verify-agent-project.ps1",
+                "sha256": "09dfda2282c9b68fd0119ab1a4829324e77ba7d20b2c627d9c12ea25e9dc4738",
+                "size_bytes": 470
+              }
+            ],
+            "artifacts": [
+              "MAP.md",
+              "scripts/verify-agent-project.ps1",
+              "skills-manifest.json"
+            ],
+            "timeout_seconds": 300,
+            "max_output_bytes": 2097152
+          }
+        ],
+        "dependencies": [],
+        "status": "closed",
+        "evidence": [
+          {
+            "receipt_id": "3e112356-826c-4a43-a9fc-d7cedd56d36a",
+            "check_id": "full-project-contract",
+            "verifier": "test",
+            "subject": "FT-FULL-CONTRACT",
+            "result": "pass",
+            "reference": ".agents/work/evidence/3e112356-826c-4a43-a9fc-d7cedd56d36a.json",
+            "sha256": "6eaaa00c00dacd94dc3227092726b13f3034aed7b59991b63713ad7151a5322d",
+            "size_bytes": 1671,
+            "captured_at": "2026-08-08T04:19:44.7830137Z",
+            "exit_code": 0,
+            "provenance_event_id": "4dfa5de8-f103-4232-bde5-71cdb5d49c49",
+            "project_id": "flight-tracker",
+            "track_id": "project-operations",
+            "capability_id": "handoff-completion",
+            "cell_id": "handoff-completion@D2",
+            "task_id": "FT-FULL-CONTRACT"
+          }
+        ],
+        "closed_at": "2026-08-08T04:20:02.4076077Z"
+      }
+    ],
+    "evidence": [
+      {
+        "receipt_id": "3e112356-826c-4a43-a9fc-d7cedd56d36a",
+        "check_id": "full-project-contract",
+        "verifier": "test",
+        "subject": "FT-FULL-CONTRACT",
+        "result": "pass",
+        "reference": ".agents/work/evidence/3e112356-826c-4a43-a9fc-d7cedd56d36a.json",
+        "sha256": "6eaaa00c00dacd94dc3227092726b13f3034aed7b59991b63713ad7151a5322d",
+        "size_bytes": 1671,
+        "captured_at": "2026-08-08T04:19:44.7830137Z",
+        "exit_code": 0,
+        "provenance_event_id": "4dfa5de8-f103-4232-bde5-71cdb5d49c49",
+        "project_id": "flight-tracker",
+        "track_id": "project-operations",
+        "capability_id": "handoff-completion",
+        "cell_id": "handoff-completion@D2",
+        "task_id": "FT-FULL-CONTRACT"
+      }
+    ],
+    "discoveries": []
+  },
+  "tracks": [
+    {
+      "id": "project-operations",
+      "status": "active",
+      "capabilities": [
+        {
+          "id": "handoff-completion",
+          "name": "Flight Finder handoff completion",
+          "current_depth": "D2",
+          "target_depth": "D2",
+          "status": "closed",
+          "dependencies": [],
+          "blockers": [],
+          "owner_session": "codex-019fdf3d"
+        }
+      ]
+    }
+  ],
+  "revision": 24,
+  "created_at": "2026-08-08T02:52:03.73101Z"
+}
