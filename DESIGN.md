@@ -48,13 +48,14 @@ beige-brass-espresso "premium consumer" palette is the same tell; rotate off it.
 Concrete things to reach for — animation packages and working skeletons, icon kits, typeface pools, design-system install commands and canonical documentation. Read the leaf you need; each one loads on its own.
 
 - **Index** `~/.agents/design/LIBRARIES.md`
-- **Motion** `~/.agents/design/animation/` — libraries, sticky-stack, horizontal-pan, scroll-reveal, frosted glass, forbidden patterns
+- **Motion** `~/.agents/design/animation/` — `libraries.md`, `sticky-stack.md`, `horizontal-pan.md`, `scroll-reveal.md`, `liquid-glass.md` (frosted glass), `forbidden.md`
 - **Icons** `~/.agents/design/icons/libraries.md`
 - **Type** `~/.agents/design/type/families.md`
 - **Design systems** `~/.agents/design/systems/install.md` and `sources.md`
 - **Design languages** `~/.agents/design/languages/registry.md` — read it before committing a visual world or generating a new design language, and register the world committed for this project there in the same work unit
-- **Surface craft** `~/.agents/design/craft/` — high-end surface construction, building faithfully from a reference image, device mockups
+- **Surface craft** `~/.agents/design/craft/` — `high-end.md` (surface construction), `from-reference.md` (building faithfully from a reference image), `device-mockups.md`
 - **Pre-ship matrix** `~/.agents/design/preflight.md` — the mechanical finish check for landing, marketing and portfolio surfaces; not dashboards, not product UI
+- **Dashboards and data-dense product UI** — this tree does not own them yet, and the gap is easy to miss because everything above *sounds* general. The pre-ship matrix disclaims them in its own scope line, and the universal rules below contain no rule about chart form, tile hierarchy, table craft or metric emphasis. The nearest real guidance is the ten-dimension rubric inside the `/design-review` command — tile prominence, one-accent discipline, elevation over borders, chart form matched to the data's meaning, tables built as tools — which is written to critique a running app rather than to generate one. A blind probe on 2026-08-08 reached it only by grepping the word "dashboard", and reported it would otherwise have "proceeded confidently and wrongly". Read it before designing a dashboard, and treat the rest of this section as not yet covering you
 
 The full universal rules are `~/.agents/DESIGN.md`. Where a library entry and a rule disagree, the rule wins.
 
