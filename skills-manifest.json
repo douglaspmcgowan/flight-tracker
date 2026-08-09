@@ -139,11 +139,10 @@
     },
     {
       "capability": "spec",
-      "canonical": [],
-      "commands": [
+      "canonical": [
         "spec"
       ],
-      "delivery": "command"
+      "delivery": "vendored"
     },
     {
       "capability": "correct",

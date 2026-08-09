@@ -40,6 +40,8 @@ beige-brass-espresso "premium consumer" palette is the same tell; rotate off it.
 - Cover relevant default, hover, focus, active, disabled, loading, empty, error, and success states.
 - Use semantic structure and native controls, visible keyboard focus, logical tab order, accessible names, sufficient contrast, and non-color state cues.
 - Support narrow, medium, and wide layouts, zoom, text resizing, touch targets, and reduced motion.
+- A design skill's silence on accessibility is not an exemption. Seven of the sixteen design-adjacent skill packages carry no accessibility content at all, so the two bullets above are the floor whichever skill is driving.
+- A visual world is chosen, not accumulated. Template packs, style presets, and named aesthetics contradict each other by construction — `retro-windows` bans every rounded corner where `capsule` requires a 9999px radius. Commit to one, take its taste entire, and treat the others as unread. The rules here apply to all of them.
 - Inspect the existing design system, screenshots, and implementation before proposing a new rule or component.
 - Verify browser-visible work with browser or end-to-end tests across responsive, keyboard, loading, empty, and error behavior.
 

@@ -1,3 +1,18 @@
+# agent-harness:project-gitignore:v1:start
+# Managed block. Its source is .agents/templates/gitignore in the harness repository; edit it
+# there and re-run EnsureProject. Anything you add outside these markers is preserved.
+
+# Task-hook runtime state. hook-state.js writes <repo-root>/taskstate/<project-id>/ by its own
+# design -- session-local records, allow-tag usage among them -- which belong to one device and
+# one session rather than to the project. It was never ignored, so every project running the
+# hooks accumulated an untracked directory in its root that a `git add -A` would commit.
+taskstate/
+
+# The pre-relocation location for the same state. A session that predates the move still writes
+# here, so a project can acquire this directory without any current tool creating it.
+.claude/state/
+# agent-harness:project-gitignore:v1:end
+
 .env
 .env.*
 !.env.example

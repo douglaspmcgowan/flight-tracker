@@ -16,7 +16,7 @@
     },
     {
       "path": "DESIGN.md",
-      "sha256": "99c22984a0aac6f89edb394dfee53969aa204e060647efff58992f2fb9b943c9"
+      "sha256": "bd3897e2e3fb591a16470c51b8843ecf6c1a8cd139b1064d660dbb9ed548fd25"
     },
     {
       "path": "MAP.md",
@@ -28,7 +28,7 @@
     },
     {
       "path": "skills-manifest.json",
-      "sha256": "0993c1c1a030fd0dff4e5d52ff6237050f101b5e46e7c7f5efe54b06a0df58f3"
+      "sha256": "95192521d9e6f8e854a90189d46883a765158bcfdc88eb7fdf3f2db158a34307"
     },
     {
       "path": "data-manifest.yaml",
