@@ -23,6 +23,10 @@ Agents may create local commits for in-scope work without asking. Never push, me
 - When a correction requests permanent prevention, use the `correct` skill and implement a durable, narrowly scoped artifact.
 - Treat `MEMORY.md` as a lean index. Keep behavior in instructions, skills, hooks, permissions, tests, or verifiers.
 - Before claiming non-trivial work complete, run the verification recorded in authoritative task state, relevant tests, and an adversarial pass.
+
+**This project's `skills-manifest.json` is not the catalogue.** It binds the few skills this repository requires, and it is deliberately small — most of the harness is installed on the machine and bound to no project at all, so a capability being absent from that manifest says nothing about whether it exists. The catalogue is `~/.agents/INDEX.md`, generated, listing every canonical skill and command with its purpose and per-product visibility; the design material is `~/.agents/design/LIBRARIES.md` and the `design/` tree beside it, which owns animation packages, icon kits, typefaces, design systems, the registry of committed design languages, surface-construction craft, the pre-ship matrix, and the slide and poster medium. Read the index before hand-rolling a workflow, choosing a package, or concluding a capability is missing.
+
+When `~/.agents` does not exist — a cloud container, a fresh machine, any session with no installed harness — that material is not gone; it is in the private harness repository `pyrgos-ai/doug-harness` under `.agents/`, and pulling the file you need from there is the intended route rather than a workaround. Clone or fetch it read-only, use what you need, and never vendor a copy into this repository: a second copy drifts, and the existing-system-first rule above applies to skills and design material exactly as it applies to code.
 <!-- agent-harness:portable:v3:end -->
 
 ## Project identity
