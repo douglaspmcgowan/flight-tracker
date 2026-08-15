@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "AGENTS.md",
-      "sha256": "8b432550accc3c5ff568ed09e8907987760df133e2c9ab1f6a2d877a59a7945a"
+      "sha256": "6d8f7b7b98fc0556857a2c9fd3eee611ce925091d4f0253407344d21ab9e1389"
     },
     {
       "path": "CLAUDE.md",
@@ -16,7 +16,7 @@
     },
     {
       "path": "DESIGN.md",
-      "sha256": "1c55b8674813660d4537636b27c542512f563cc6736c1184c680e69c7c98b5c5"
+      "sha256": "4184612d643f0ce8911c848a8de8c9bdd64d9991e4e9dba133cc374e1be84095"
     },
     {
       "path": "MAP.md",

@@ -2,7 +2,7 @@
 
 This repository contract travels with the project for Claude, Codex, Cursor, and cloud agents.
 
-<!-- agent-harness:portable:v3:start -->
+<!-- agent-harness:portable:v4:start -->
 ## Portable operating rules
 
 Use subagents immediately for every independent, file-disjoint workstream. This is explicit authorization to parallelize. Keep only destructive or dependent final gates serial.
@@ -41,13 +41,6 @@ pwsh -File ~/.agents/tools/Add-ProjectIntake.ps1 -Project <name-or-path> -Id <sl
 ```
 
 Add `-List` to read a project's intake instead of writing to it. A bare project name resolves under the projects root, which is what the folder-name-equals-repo-name convention buys; set `AGENT_PROJECTS_ROOT` where that root differs, as it does in a container.
-<!-- agent-harness:portable:v3:end -->
-
-## Project identity
-
-- Name: `flight-tracker`
-- Purpose: Coordinate the Flight Finder application, its local fast-flights sidecar, operating briefs, and durable research while the application remains in the separate `base-flight-finder` repository.
-- Default branch: `master`
 
 ## Start and resume
 
@@ -55,6 +48,40 @@ Add `-List` to read a project's intake instead of writing to it. A bare project 
 2. Run `git status --short --branch` and inspect worktrees before editing.
 3. Read `MAP.md` for architecture, data, ownership, integrations, or important paths.
 4. Read `DESIGN.md` for interface work and `PRODUCT.md` when present.
+
+## Task-state authority
+
+If the exact project path `.agents/work/state.json` exists, Work Scope is enrolled and that structured file is authoritative. Load and follow the `work-scope` skill, including its scope-guard, ownership, evidence, and handoff rules. Resolve tools from the package containing the loaded skill, then run `Test-WorkState.ps1`, `Get-WorkResume.ps1`, and `Reconcile-WorkState.ps1` with `-Root <project-root>` before changing task state. Treat `PROJECT.md`, `TRACKS.md`, `TASK.md`, `BACKBURNER.md`, and `LOG.md` as generated, read-only views. Route active-cell changes through `Update-WorkState.ps1`, executed checks through `Invoke-WorkScopeEvidence.ps1`, and pre-write ownership checks through `Test-WorkScopeGuard.ps1`. Route adjacent or deferred work through `Capture-WorkDiscovery.ps1`; use `New-WorkHandoff.ps1` for independent outcomes. A present but invalid state file fails closed and never falls back to legacy task files.
+
+When `.agents/work/state.json` is absent, the legacy `TASK.md`, `BACKBURNER.md`, and `LOG.md` files retain their documented ownership. In either mode, durable capability state belongs in `MAP.md`, not in a task file. `STATUS.md` is retired; do not create one.
+
+## Project files
+
+- `TASK.md`: generated Work Scope view when enrolled; otherwise the legacy current goal, actionable queue, blockers, completed evidence, and next verifier.
+- `LOG.md`: generated Work Scope view when enrolled; otherwise the legacy append-only completed-work record.
+- `BACKBURNER.md`: generated Work Scope discovery view when enrolled; otherwise legacy parked ideas.
+- `MAP.md`: architecture, paths, data flow, integrations, and ownership.
+- `DESIGN.md`: universal interface rules plus project-specific design rules.
+- `PRODUCT.md`: optional product intent for an app or product repository.
+- `MEMORY.md`: lean links to durable references.
+- `skills-manifest.json`: canonical baseline and project skill bindings.
+- `data-manifest.yaml`: external-data authorities, adapters, restore rules, and verifiers.
+- `secret-manifest.json`: value-free secret names, providers, trust boundaries, and consumers.
+- `.gitignore`: carries a managed `agent-harness:project-gitignore:v1` block covering the task hooks' own runtime state. Put project-owned rules outside the markers; anything inside them is regenerated.
+- `.gitattributes`: carries a managed `agent-harness:project-gitattributes:v1` block exempting vendored third-party skills from whitespace linting, since their bytes are referenced and never edited. Project-owned attributes go outside the markers.
+
+## What is managed here, and what is yours
+
+Everything above the closing marker is generated from the shared harness and is replaced on every project sync. Edit it in `.agents/templates/AGENTS.md` in the harness repository, not here. Everything below the marker is this project's own and is never rewritten -- put project identity, real commands, and repository-specific rules there.
+
+The block covered only the portable operating rules until 2026-08-09. The startup procedure, the task-state authority and the project-files list sat outside it, so a correction to any of the three had to be re-applied by hand in every project and drifted the moment one was missed. Douglas ruled (`ahp-project-block-scope`) to widen it to cover all three.
+<!-- agent-harness:portable:v4:end -->
+
+## Project identity
+
+- Name: `flight-tracker`
+- Purpose: Coordinate the Flight Finder application, its local fast-flights sidecar, operating briefs, and durable research while the application remains in the separate `base-flight-finder` repository.
+- Default branch: `master`
 
 ## Commands
 
@@ -71,16 +98,6 @@ Record the actual command or observable proof in `TASK.md` and `LOG.md`.
 - Keep the Flight Finder application and its Git history in the sibling `C:\Users\dougl\projects\base-flight-finder` repository.
 - Do not commit Python virtual environments, caches, runtime logs, task-hook runtime state, or `.env` files.
 - Treat `fast-flights-sidecar\probe.py` as an explicit live network probe; run it only when current fare lookup is intended.
-
-## Project files
-
-- `LOG.md`: append-only completed-work record.
-- `BACKBURNER.md`: parked ideas.
-- `MAP.md`: architecture, paths, data flow, integrations, and ownership.
-- `DESIGN.md`: universal interface rules plus project-specific design rules.
-- `PRODUCT.md`: optional product intent for an app or product repository.
-- `MEMORY.md`: lean links to durable references.
-- `skills-manifest.json`: canonical baseline and project skill bindings.
 
 ## Product adapters
 

@@ -23,6 +23,28 @@ beige-brass-espresso "premium consumer" palette is the same tell; rotate off it.
 - Where a brief reads as an established design system, use that system's official package rather than approximating it. One system per project.
 - The brief wins. Honor a pinned aesthetic even when it is not the choice you would make; redirecting a clear brief toward your own taste is failure, not judgment.
 
+### Names that appear here only to be forbidden
+
+The rules above and below name specific typefaces in order to ban them. A project that
+scans its own source for banned font names will find those names *here* and report this
+file as the violation — measured on `base-flight-finder`, 2026-08-07, whose typography
+policy test failed against text whose whole purpose is to forbid the thing it names.
+
+**If you write such a scan, exclude the region between the two `agent-harness:universal-design`
+marker comments.** That region is generated and is replaced wholesale on every sync, so
+nothing a project owns ever lives inside it. The names are also declared machine-readably
+on the next line, so a scanner can subtract them without parsing prose. `Test-DesignBlockScanSafety.ps1`
+fails the build if any of them appears outside the markers, which is what makes the
+exclusion sufficient rather than merely conventional.
+
+**Match on word boundaries, not substrings.** `Inter` is a prefix of interaction,
+interface, internal and interval, so a bare substring scan reports a violation on ordinary
+English. That is a second, independent cause of the same false positive, and it lives on
+your side of the line rather than in this block — the check above hit it on its own first
+run, against the heading "Interaction and accessibility" a few sections down.
+
+<!-- agent-harness:design-prohibited-names: IBM Plex Mono, Inter, Fraunces, Instrument Serif -->
+
 ### Everything else
 
 - Never use IBM Plex Mono.
@@ -60,6 +82,7 @@ Concrete things to reach for — animation packages and working skeletons, icon 
 - **Slides and posters** `~/.agents/design/slides-and-posters.md` — the only leaf addressing a non-web medium: deck frameworks, PowerPoint craft, HTML deck frameworks, and the academic poster including A0 sizing and the ≥24pt body floor
 - **Pre-ship matrix** `~/.agents/design/preflight.md` — the mechanical finish check for landing, marketing and portfolio surfaces; not dashboards, not product UI
 - **Dashboards and data-dense product UI** `~/.agents/design/dashboards.md` — the full system for the surface this tree used to leave uncovered: the three dashboard kinds and why building one while thinking of another causes most of the mistakes, information architecture and the three reading distances, density targets set against marketing spacing, typography and colour for data (sequential, diverging, categorical and semantic scales), chart selection ordered by the Cleveland-McGill perceptual ranking, chart and table craft, the six states every data region has, filters and URL state, interaction, real-time cadence, renderer choice by point count, the charting-library table, the anti-patterns, and a §18 pre-ship matrix that is the entry above's equivalent for this medium. This line used to say the tree did not own dashboards and pointed at the `/design-review` rubric, which critiques a running app rather than generating one; that gap closed on 2026-08-09
+- **Mobile, touch and responsive** `~/.agents/design/mobile.md` — the medium, not a surface type: the three kinds of mobile thing and why a responsive site should not get a bottom tab bar, the viewport and its moving parts (`svh`/`lvh`/`dvh`, `viewport-fit=cover`, `env(safe-area-inset-*)` with the `max()` fallback that is the part people omit), the three touch-target floors — WCAG 2.2's 24px, Material's 48dp, Apple's 44pt — and which to design to, thumb reach and what it decides, mobile type including the 16px threshold below which iOS zooms a focused input, breakpoints and container queries, navigation patterns, forms with `inputmode`/`autocomplete`/`enterkeyhint` and the keyboard that covers your action bar, the gestures the OS has already reserved, the states that do not exist without a pointer, scrolling, the motion budget on a mid-tier device, images, offline, touch accessibility, the anti-patterns, a §18 pre-ship matrix, and §19 on the four checks emulation cannot answer. It does not restate `impeccable`'s `reference/adapt.md`, which owns converting an existing surface between contexts
 
 The full universal rules are `~/.agents/DESIGN.md`. Where a library entry and a rule disagree, the rule wins.
 
