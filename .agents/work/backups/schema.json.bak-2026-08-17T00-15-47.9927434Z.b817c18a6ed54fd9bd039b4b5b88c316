@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.codex/work-scope/state.schema.json",
+  "title": "Work Scope State",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "revision",
+    "created_at",
+    "updated_at",
+    "project",
+    "tracks",
+    "active",
+    "frontier",
+    "ownership",
+    "backburner",
+    "last_event_id",
+    "last_event_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 },
+    "project": { "$ref": "#/$defs/project" },
+    "tracks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/track" }
+    },
+    "active": { "$ref": "#/$defs/activeCell" },
+    "frontier": { "$ref": "#/$defs/frontier" },
+    "ownership": { "$ref": "#/$defs/ownership" },
+    "backburner": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/backburnerItem" }
+    },
+    "last_event_id": {
+      "type": ["string", "null"]
+    },
+    "last_event_hash": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        { "type": "null" }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "depth": {
+      "enum": ["D0", "D1", "D2", "D3", "D4", "D5"]
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "evidenceReceipt": {
+      "type": "object",
+      "required": [
+        "receipt_id",
+        "verifier",
+        "subject",
+        "result",
+        "reference",
+        "sha256",
+        "size_bytes",
+        "captured_at"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9-]{36}$"
+        },
+        "verifier": {
+          "enum": ["test", "command", "inspection", "artifact", "source"]
+        },
+        "subject": { "type": "string", "minLength": 1 },
+        "result": { "enum": ["pass", "verified"] },
+        "reference": { "type": "string", "minLength": 1 },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "captured_at": { "type": "string", "minLength": 1 },
+        "check_id": { "$ref": "#/$defs/safeId" },
+        "exit_code": { "type": "integer" },
+        "provenance_event_id": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9-]{36}$"
+        },
+        "project_id": { "$ref": "#/$defs/safeId" },
+        "track_id": { "$ref": "#/$defs/safeId" },
+        "capability_id": { "$ref": "#/$defs/safeId" },
+        "cell_id": { "type": "string", "minLength": 3 },
+        "task_id": { "$ref": "#/$defs/safeId" }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidenceReceipt" }
+    },
+    "project": {
+      "type": "object",
+      "required": ["id", "kind", "initiative_id", "root", "definition_of_done"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "kind": {
+          "enum": ["application", "operations", "agent-harness", "coordination", "client"]
+        },
+        "initiative_id": { "$ref": "#/$defs/safeId" },
+        "root": { "type": "string", "minLength": 1 },
+        "remote": { "type": "string", "minLength": 1 },
+        "definition_of_done": { "$ref": "#/$defs/stringArray" }
+      },
+      "additionalProperties": false
+    },
+    "capability": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "current_depth",
+        "target_depth",
+        "status",
+        "dependencies",
+        "blockers",
+        "owner_session"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "name": { "type": "string", "minLength": 1 },
+        "current_depth": {
+          "oneOf": [
+            { "$ref": "#/$defs/depth" },
+            { "type": "null" }
+          ]
+        },
+        "target_depth": { "$ref": "#/$defs/depth" },
+        "status": { "enum": ["active", "blocked", "closed"] },
+        "dependencies": { "$ref": "#/$defs/stringArray" },
+        "blockers": { "$ref": "#/$defs/stringArray" },
+        "owner_session": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "track": {
+      "type": "object",
+      "required": ["id", "status", "capabilities"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "status": { "enum": ["active", "blocked", "closed"] },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/capability" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "acceptanceCheck": {
+      "type": "object",
+      "required": [
+        "id",
+        "verifier",
+        "executable",
+        "executable_sha256",
+        "arguments",
+        "arguments_sha256",
+        "verifier_inputs",
+        "artifacts",
+        "timeout_seconds",
+        "max_output_bytes"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "verifier": { "enum": ["test", "command"] },
+        "executable": {
+          "type": "string",
+          "minLength": 5,
+          "pattern": "^(?:.*\\.[eE][xX][eE]|/(?!.*\\.(?:cmd|bat|com|ps1|psm1|sh|bash|zsh|ksh|py|rb|pl|php|js|mjs|cjs|vbs|jse|wsf|wsh)$).*)$"
+        },
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "arguments": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "arguments_sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "verifier_inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifactSnapshot" }
+        },
+        "artifacts": { "$ref": "#/$defs/stringArray" },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 10485760
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactSnapshot": {
+      "type": "object",
+      "required": ["reference", "sha256", "size_bytes"],
+      "properties": {
+        "reference": { "type": "string", "minLength": 1 },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "size_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "acceptance",
+        "acceptance_checks",
+        "dependencies",
+        "status",
+        "evidence",
+        "closed_at"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "title": { "type": "string", "minLength": 1 },
+        "acceptance": { "type": "string", "minLength": 1 },
+        "acceptance_checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/acceptanceCheck" }
+        },
+        "dependencies": { "$ref": "#/$defs/stringArray" },
+        "status": { "enum": ["ready", "blocked", "closed", "retired"] },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "closed_at": { "type": ["string", "null"] },
+        "retired_reason": { "type": "string", "minLength": 1 },
+        "retired_at": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "closed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "evidence": { "minItems": 1 },
+              "closed_at": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "activeCell": {
+      "type": "object",
+      "required": [
+        "track_id",
+        "capability_id",
+        "depth",
+        "cell_id",
+        "status",
+        "opened_at",
+        "closed_at",
+        "goal",
+        "in_scope",
+        "out_of_scope",
+        "tasks",
+        "evidence",
+        "discoveries"
+      ],
+      "properties": {
+        "track_id": { "$ref": "#/$defs/safeId" },
+        "capability_id": { "$ref": "#/$defs/safeId" },
+        "depth": { "$ref": "#/$defs/depth" },
+        "cell_id": { "type": "string", "minLength": 3 },
+        "status": { "enum": ["active", "closed", "blocked"] },
+        "opened_at": { "type": "string", "minLength": 1 },
+        "closed_at": { "type": ["string", "null"] },
+        "goal": { "type": "string", "minLength": 1 },
+        "in_scope": { "$ref": "#/$defs/stringArray" },
+        "out_of_scope": { "$ref": "#/$defs/stringArray" },
+        "tasks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/task" }
+        },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "discoveries": { "$ref": "#/$defs/stringArray" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "closed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "tasks": { "minItems": 1 },
+              "evidence": { "minItems": 1 },
+              "closed_at": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "frontier": {
+      "type": "object",
+      "required": [
+        "mode",
+        "automatic",
+        "depth_ceiling",
+        "breadth_boundary",
+        "selection_strategy",
+        "handoff_independent_tracks",
+        "stop_on"
+      ],
+      "properties": {
+        "mode": { "enum": ["drilldown", "expand"] },
+        "automatic": { "type": "boolean" },
+        "depth_ceiling": { "$ref": "#/$defs/depth" },
+        "breadth_boundary": {
+          "enum": ["capability", "track", "project", "portfolio", "system"]
+        },
+        "selection_strategy": {
+          "enum": [
+            "dependency-first",
+            "highest-value",
+            "highest-risk",
+            "shortest-ready",
+            "balanced"
+          ]
+        },
+        "handoff_independent_tracks": { "type": "boolean" },
+        "stop_on": { "$ref": "#/$defs/stringArray" }
+      },
+      "additionalProperties": false
+    },
+    "ownershipSession": {
+      "type": "object",
+      "required": ["session_id", "track_id", "capability_id", "artifacts"],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1 },
+        "track_id": { "$ref": "#/$defs/safeId" },
+        "capability_id": { "$ref": "#/$defs/safeId" },
+        "artifacts": { "$ref": "#/$defs/stringArray" }
+      },
+      "additionalProperties": false
+    },
+    "ownership": {
+      "type": "object",
+      "required": ["sessions"],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ownershipSession" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "backburnerItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "project",
+        "suggested_track",
+        "suggested_capability",
+        "entry_depth",
+        "discovered_from",
+        "relationship",
+        "dependencies",
+        "blockers",
+        "conflicts",
+        "value",
+        "risk",
+        "evidence",
+        "status",
+        "captured_at"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "title": { "type": "string", "minLength": 1 },
+        "project": { "$ref": "#/$defs/safeId" },
+        "suggested_track": { "$ref": "#/$defs/safeId" },
+        "suggested_capability": { "$ref": "#/$defs/safeId" },
+        "entry_depth": { "$ref": "#/$defs/depth" },
+        "discovered_from": { "type": "string", "minLength": 1 },
+        "relationship": {
+          "enum": ["adjacent", "prerequisite", "follow-up", "defect", "opportunity"]
+        },
+        "dependencies": { "$ref": "#/$defs/stringArray" },
+        "blockers": { "$ref": "#/$defs/stringArray" },
+        "conflicts": { "$ref": "#/$defs/stringArray" },
+        "value": { "enum": ["low", "medium", "high"] },
+        "risk": { "enum": ["low", "medium", "high"] },
+        "evidence": {
+          "allOf": [
+            { "$ref": "#/$defs/evidence" },
+            { "minItems": 1 }
+          ]
+        },
+        "status": {
+          "enum": ["captured", "ready", "blocked", "selected", "closed", "rejected"]
+        },
+        "captured_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

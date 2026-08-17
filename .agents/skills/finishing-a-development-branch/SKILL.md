@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: finishing-a-development-branch
 description: Use when implementation is complete, all tests pass, and you need to decide how to integrate the work
+when_to_use: "Implementation is done and the work has to be integrated. Verifies the suite is green before any menu appears, detects whether you are in a normal repository, a named-branch worktree or detached HEAD, and presents only the integration options that environment actually supports. Preserves the branch and the workspace by default; cleanup happens only under a separate explicit authorization, never as a side effect of merging."
 ---
 
 # Finishing a Development Branch

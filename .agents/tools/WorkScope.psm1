@@ -12,6 +12,105 @@ $script:DepthNames = @{
 }
 $script:EvidencePattern = '^verifier=(?<verifier>test|command|inspection|artifact|source); subject=(?<subject>[^;]+); result=(?<result>pass|verified); reference=(?<reference>.+)$'
 $script:HeldWorkScopeLocks = @{}
+# Reparse-point resolutions for one validation pass. Cleared by New-WorkScopeValidationContext.
+$script:WorkScopePhysicalPathCache = @{}
+
+function New-WorkScopeValidationContext {
+    param([Parameter(Mandatory)] [string]$Root)
+    # A new pass re-reads the filesystem, including its reparse points.
+    $script:WorkScopePhysicalPathCache = @{}
+    [pscustomobject]@{
+        PhysicalRoot = Get-WorkScopeCanonicalRoot -Root $Root
+        Events = $null
+        EventIndex = $null
+        EventHashCache = @{}
+        ReceiptCache = @{}
+        ArtifactCache = @{}
+        SnapshotTextPolicyCache = @{}
+        Counters = @{
+            event_log_parses = 0
+            event_hash_computations = 0
+            event_hash_cache_hits = 0
+            event_index_builds = 0
+            receipt_loads = 0
+            receipt_cache_hits = 0
+            artifact_resolutions = 0
+            artifact_cache_hits = 0
+            snapshot_git_queries = 0
+            snapshot_text_policy_cache_hits = 0
+        }
+    }
+}
+
+function Get-WorkScopeValidationEvents {
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        $Context
+    )
+    if ($null -ne $Context -and $null -ne $Context.Events) { return @($Context.Events) }
+    $paths = Get-WorkScopePaths -Root $Root
+    # Same lines, same parser, same blank-line rule, without three pipeline stages.
+    # The pipeline form invoked two scriptblocks per line and streamed every line
+    # through the cmdlet machinery twice: 3,006 scriptblock invocations for this
+    # repository's 1,503-event log. Measured here, 496 ms -> 376 ms for an identical
+    # event array. `ReadAllLines` splits on the same terminators as `Get-Content` and
+    # detects the same byte-order marks.
+    $parsed = [System.Collections.Generic.List[object]]::new()
+    foreach ($line in [System.IO.File]::ReadAllLines($paths.Events)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $parsed.Add((ConvertFrom-Json -InputObject $line -AsHashtable))
+    }
+    $events = @($parsed.ToArray())
+    # A log long enough to be worth a Roslyn compile starts that compile now, off the
+    # critical path, because roughly a second of ownership and backburner validation
+    # runs between here and the first hash that needs it. See the function's own note.
+    if ($events.Count -ge $script:WorkScopeNativeCanonicalizerThreshold) {
+        Start-WorkScopeNativeCanonicalizerCompile
+    }
+    if ($null -ne $Context) {
+        $Context.Events = $events
+        $Context.EventIndex = @{}
+        foreach ($event in $events) {
+            $Context.EventIndex[[string]$event.event_id] = $event
+        }
+        $Context.Counters.event_log_parses = [int]$Context.Counters.event_log_parses + 1
+        $Context.Counters.event_index_builds = [int]$Context.Counters.event_index_builds + 1
+    }
+    return $events
+}
+
+function Resolve-WorkScopeCachedArtifact {
+    param([Parameter(Mandatory)] [string]$Root, [Parameter(Mandatory)] [string]$Artifact, $ValidationContext)
+    if ($null -eq $ValidationContext) { return Resolve-WorkScopeArtifact -Root $Root -Artifact $Artifact }
+    # One dictionary read on the hit path instead of ContainsKey plus two indexes.
+    # A cached value is always a non-empty relative path, so $null is unambiguously a
+    # miss, and a resolve that throws still propagates without poisoning the cache.
+    $cache = $ValidationContext.ArtifactCache
+    $key = $ValidationContext.PhysicalRoot + '|' + $Artifact
+    $resolved = $cache[$key]
+    if ($null -ne $resolved) {
+        $ValidationContext.Counters.artifact_cache_hits = [int]$ValidationContext.Counters.artifact_cache_hits + 1
+        return $resolved
+    }
+    $resolved = Resolve-WorkScopeArtifact -Root $Root -Artifact $Artifact
+    $cache[$key] = $resolved
+    $ValidationContext.Counters.artifact_resolutions = [int]$ValidationContext.Counters.artifact_resolutions + 1
+    return $resolved
+}
+
+function Get-WorkScopeValidationEventById {
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$EventId,
+        $Context
+    )
+    $events = @(Get-WorkScopeValidationEvents -Root $Root -Context $Context)
+    if ($null -ne $Context -and $null -ne $Context.EventIndex) {
+        if ($Context.EventIndex.ContainsKey($EventId)) { return $Context.EventIndex[$EventId] }
+        return $null
+    }
+    return @($events | Where-Object { $_.event_id -eq $EventId } | Select-Object -First 1)
+}
 
 function Expand-WorkScopePackedArgument {
     <#
@@ -23,20 +122,50 @@ function Expand-WorkScopePackedArgument {
         single junk artifact path that no guarded action can remove, and a
         discovery capture failed with "A positional parameter cannot be found".
 
-        Only the unambiguous mangled shape is unpacked: one element that is a
-        comma-separated list of QUOTED items. A real path is never quoted, so a
-        genuine path containing a comma is left untouched.
+        Only the unambiguous mangled shape is unpacked: quoted items separated
+        by commas. A real path is never quoted, so a genuine unquoted path
+        containing a comma is left untouched. An attempted quoted list that
+        does not fully parse is refused before a wrapper calls a state mutation.
     #>
     param([string[]]$Value)
 
-    if ($null -eq $Value -or $Value.Count -ne 1) { return $Value }
-    $only = $Value[0]
-    if ($only -notmatch "^\s*['`"][^'`"]*['`"]\s*(,\s*['`"][^'`"]*['`"]\s*)+$") { return $Value }
+    if ($null -eq $Value) { return $Value }
 
-    return @($only -split ',' | ForEach-Object { $_.Trim().Trim("'").Trim('"') } | Where-Object { $_ })
+    $normalized = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @($Value)) {
+        $text = [string]$item
+        if ($text -match "^\s*['`"][^'`"]*['`"]\s*(,\s*['`"][^'`"]*['`"]\s*)+$") {
+            foreach ($expanded in @($text -split ',' | ForEach-Object { $_.Trim().Trim("'").Trim('"') } | Where-Object { $_ })) {
+                $normalized.Add($expanded)
+            }
+            continue
+        }
+        if ($text -match "^\s*['`"][^'`"]*['`"]\s*,") {
+            throw "Array argument contains a malformed packed array '$text'. Pass a real PowerShell array or a complete quoted comma-list."
+        }
+        $normalized.Add($text)
+    }
+    # The unary comma is load-bearing. `return @(...)` unrolls the collection into the
+    # pipeline, and an EMPTY collection unrolls to nothing -- so the caller gets $null
+    # rather than @(). Both wrapper scripts assign this straight back over their own
+    # @()-defaulted array parameters, so every array argument the caller did NOT supply
+    # reached the module as $null, and the first `.Count` read on one crashed under
+    # Set-StrictMode: `Update-WorkState.ps1 -Action add-task ... -CheckExecutable pwsh`
+    # died in Add-WorkScopeTask's interpreter check with "The property 'Count' cannot be
+    # found on this object", blocking the documented way to materialize a task. The
+    # defect existed only on the empty path, which is why every populated-input test
+    # passed over it. WorkScope.EmptyArrayArgument.test.ps1 pins both halves.
+    return , @($normalized.ToArray())
 }
 
-function ConvertTo-WorkScopeCanonicalValue {
+function ConvertTo-WorkScopeCanonicalValueReference {
+    <#
+        The original canonicalizer, kept verbatim and now reached only through the
+        event-hash fallback below. It is the definition of the canonical form: every
+        event hash and every stored canonical record comparison in every enrolled
+        project was produced by exactly this code, so it is the authority the tuned
+        implementation is measured against rather than a second opinion.
+    #>
     param($Value)
     if ($null -eq $Value) {
         return $null
@@ -44,11 +173,63 @@ function ConvertTo-WorkScopeCanonicalValue {
     if ($Value -is [System.Collections.IDictionary]) {
         $ordered = [ordered]@{}
         foreach ($key in @($Value.Keys | ForEach-Object { [string]$_ } | Sort-Object)) {
+            $ordered[$key] = ConvertTo-WorkScopeCanonicalValueReference -Value $Value[$key]
+        }
+        return $ordered
+    }
+    if ($Value -is [pscustomobject]) {
+        $ordered = [ordered]@{}
+        foreach ($property in @($Value.PSObject.Properties | Sort-Object Name)) {
+            $ordered[$property.Name] = ConvertTo-WorkScopeCanonicalValueReference -Value $property.Value
+        }
+        return $ordered
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        $items = @($Value | ForEach-Object { ConvertTo-WorkScopeCanonicalValueReference -Value $_ })
+        return ,$items
+    }
+    return $Value
+}
+
+function ConvertTo-WorkScopeCanonicalValue {
+    <#
+        Same canonical form as the reference above, without its per-node pipelines.
+        Three costs were removed and nothing else changed:
+
+        * the dictionary branch used two pipelines per node (`ForEach-Object` to cast
+          the keys, then `Sort-Object`); it now casts in a loop and sorts only when
+          there is more than one key, which is the same order Sort-Object produces;
+        * the array branch pushed every element through `ForEach-Object`, which is
+          what wrapped each element in a PSObject and sent it down the
+          `-is [pscustomobject]` branch -- true for ANY wrapped value, so a plain
+          string element canonicalises to its property bag, `{"Length":n}`. That is
+          not a nicety to preserve, it is the canonical form 2,342 stored event
+          hashes were computed under, so `ConvertTo-WorkScopeCanonicalArrayElement`
+          reproduces it deliberately instead of inheriting it accidentally;
+        * a string element took the general property-bag walk (`PSObject.Properties`
+          plus `Sort-Object`) to arrive at that one `Length` property, which is now
+          written directly.
+
+        Measured on this repository's 1,505-event log: 3,454 ms -> 874 ms, with the
+        canonical JSON byte-identical for every event in every enrolled project.
+    #>
+    param($Value)
+    if ($null -eq $Value) {
+        return $null
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $keys = [string[]]::new($Value.Count)
+        $index = 0
+        foreach ($key in $Value.Keys) { $keys[$index++] = [string]$key }
+        if ($keys.Length -gt 1) { $keys = [string[]]@($keys | Sort-Object) }
+        $ordered = [ordered]@{}
+        foreach ($key in $keys) {
             $ordered[$key] = ConvertTo-WorkScopeCanonicalValue -Value $Value[$key]
         }
         return $ordered
     }
     if ($Value -is [pscustomobject]) {
+        if ($Value -is [string]) { return [ordered]@{ Length = $Value.Length } }
         $ordered = [ordered]@{}
         foreach ($property in @($Value.PSObject.Properties | Sort-Object Name)) {
             $ordered[$property.Name] = ConvertTo-WorkScopeCanonicalValue -Value $property.Value
@@ -56,34 +237,298 @@ function ConvertTo-WorkScopeCanonicalValue {
         return $ordered
     }
     if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
-        $items = @($Value | ForEach-Object { ConvertTo-WorkScopeCanonicalValue -Value $_ })
-        return ,$items
+        $items = [System.Collections.Generic.List[object]]::new()
+        foreach ($element in $Value) {
+            $items.Add((ConvertTo-WorkScopeCanonicalArrayElement -Value $element))
+        }
+        return ,$items.ToArray()
     }
     return $Value
 }
 
-function Get-WorkScopeEventHash {
-    param([Parameter(Mandatory)] [System.Collections.IDictionary]$Event)
-    $Event = $Event |
-        ConvertTo-Json -Depth 30 -Compress |
-        ConvertFrom-Json -AsHashtable
-    $canonical = [ordered]@{
-        event_id = $Event.event_id
-        previous_event_id = $Event.previous_event_id
-        previous_event_hash = $Event.previous_event_hash
-        state_revision = [int64]$Event.state_revision
-        occurred_at = $Event.occurred_at
-        type = $Event.type
-        project_id = $Event.project_id
-        track_id = $Event.track_id
-        capability_id = $Event.capability_id
-        cell_id = $Event.cell_id
-        evidence = @($Event.evidence)
-        data = $Event.data
+# Below this many events the Roslyn compile costs more than the recursion it replaces.
+# Measured on this host: the compile is 570 ms cold, and the PowerShell recursion is
+# about 1.9 ms per event more expensive than the native walk, so the two cross at
+# roughly 300 events. A project under the line keeps the PowerShell path and pays
+# nothing for this existing.
+$script:WorkScopeNativeCanonicalizerThreshold = 300
+$script:WorkScopeNativeCanonicalizerReady = $false
+# The in-flight background compile, if one was started. See Start-...Compile below.
+$script:WorkScopeNativeCanonicalizerCompile = $null
+
+$script:WorkScopeNativeCanonicalizerSource = @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Globalization;
+
+namespace WorkScope
+{
+    public sealed class CanonicalShapeException : Exception
+    {
+        public CanonicalShapeException(string message) : base(message) { }
     }
-    $canonical = ConvertTo-WorkScopeCanonicalValue -Value $canonical
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($canonical | ConvertTo-Json -Depth 30 -Compress))
-    return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+
+    public static class NativeCanonicalizer
+    {
+        // Sort-Object's ordering for strings: current culture, case-insensitive.
+        // Checked against every distinct key set in every enrolled event log.
+        private sealed class KeyOrder : IComparer<string>
+        {
+            public int Compare(string x, string y)
+            {
+                return CultureInfo.CurrentCulture.CompareInfo.Compare(x, y, CompareOptions.IgnoreCase);
+            }
+        }
+
+        private static readonly KeyOrder Ordering = new KeyOrder();
+
+        public static object Canonicalize(object value)
+        {
+            if (value == null) return null;
+            IDictionary dictionary = value as IDictionary;
+            if (dictionary != null)
+            {
+                var names = new List<string>(dictionary.Count);
+                foreach (object key in dictionary.Keys)
+                    names.Add(key as string ?? Convert.ToString(key, CultureInfo.InvariantCulture));
+                if (names.Count > 1) names.Sort(Ordering);
+                var ordered = new OrderedDictionary(names.Count, StringComparer.CurrentCultureIgnoreCase);
+                foreach (string name in names) ordered[name] = Canonicalize(dictionary[name]);
+                return ordered;
+            }
+            if (value is string) return value;
+            IEnumerable sequence = value as IEnumerable;
+            if (sequence != null)
+            {
+                var items = new List<object>();
+                foreach (object item in sequence) items.Add(CanonicalizeElement(item));
+                return items.ToArray();
+            }
+            return value;
+        }
+
+        // An array element took the PowerShell property-bag branch, so a string element
+        // canonicalises to {"Length":n} rather than to the string.
+        private static object CanonicalizeElement(object value)
+        {
+            if (value == null) return null;
+            if (value is IDictionary) return Canonicalize(value);
+            string text = value as string;
+            if (text != null)
+            {
+                var ordered = new OrderedDictionary(1, StringComparer.CurrentCultureIgnoreCase);
+                ordered["Length"] = text.Length;
+                return ordered;
+            }
+            throw new CanonicalShapeException(
+                "Array element of type " + value.GetType().FullName + " is not modelled by the native canonicalizer.");
+        }
+    }
+}
+'@
+
+function Start-WorkScopeNativeCanonicalizerCompile {
+    <#
+        Begins the Roslyn compile on a background runspace and returns immediately.
+
+        Measured on this host: the compile is 640 ms and only 100 ms of that is this
+        type. A trivial `Add-Type` in a fresh pwsh costs 534 ms and a second one costs
+        44 ms, so what is being paid is Roslyn starting up, once per process, and no
+        amount of shrinking the C# above touches it. Meanwhile the validation that
+        needs the compiled type does roughly a second of unrelated work first -- the
+        ownership scan and the backburner receipts -- so the compile can run beside
+        that work instead of in front of it.
+
+        Nothing here decides anything. The type it produces is a fast path whose answer
+        is accepted only when it already equals the hash stored in the log, and
+        `Enable-WorkScopeNativeCanonicalizer` still returns $false and keeps the
+        PowerShell canonicalizer if this fails, so the worst case of a background
+        compile that never completes is the speed the validator had before it existed.
+
+        `BeginInvoke` runs on a thread-pool thread, which is a background thread, so a
+        pass that returns early and never joins cannot hold the process open.
+    #>
+    if ($script:WorkScopeNativeCanonicalizerReady) { return }
+    if ($null -ne $script:WorkScopeNativeCanonicalizerCompile) { return }
+    if ($null -ne ('WorkScope.NativeCanonicalizer' -as [type])) { return }
+    try {
+        $shell = [powershell]::Create()
+        $null = $shell.AddScript('param($Source) Add-Type -TypeDefinition $Source').AddArgument(
+            $script:WorkScopeNativeCanonicalizerSource)
+        $script:WorkScopeNativeCanonicalizerCompile = [pscustomobject]@{
+            Shell = $shell
+            Handle = $shell.BeginInvoke()
+        }
+    }
+    catch {
+        # A host that cannot spare a runspace compiles inline on first use instead.
+        $script:WorkScopeNativeCanonicalizerCompile = $null
+    }
+}
+
+function Wait-WorkScopeNativeCanonicalizerCompile {
+    <#
+        Joins any in-flight background compile and disposes its runspace.
+
+        Every other `Add-Type` in this module calls this first. PowerShell's `Add-Type`
+        keeps process-wide state, so two compiles running at once is a race nobody
+        needs: the CRLF normalizer and the native process runner are rare enough that
+        serialising them behind this costs nothing measurable, and it means at most one
+        Roslyn compile is ever in flight in this process.
+    #>
+    $pending = $script:WorkScopeNativeCanonicalizerCompile
+    if ($null -eq $pending) { return }
+    $script:WorkScopeNativeCanonicalizerCompile = $null
+    try { $null = $pending.Shell.EndInvoke($pending.Handle) }
+    catch { }
+    finally { $pending.Shell.Dispose() }
+}
+
+function Enable-WorkScopeNativeCanonicalizer {
+    <#
+        The same canonical form again, in C#, for logs long enough to be worth a
+        compile. It is a fast path and never an authority: it models only the shapes it
+        can prove it reproduces -- dictionaries, strings, nulls, arrays of dictionaries
+        or strings -- and throws CanonicalShapeException on anything else rather than
+        guessing, and its answer is still only accepted when it equals the hash already
+        stored in the log. An array of numbers, dates or arrays canonicalises through
+        PowerShell's own type adapter into a property bag whose contents are
+        culture- and runtime-dependent (a DateTime element expands to eighteen
+        properties, one of which is the LENGTH of its localised string form); modelling
+        that in C# would be guessing, so it declines instead.
+
+        Verified against every event in every enrolled project on this host on
+        2026-08-15: 2,342 events, 2,342 hashes equal to the stored hash, zero declines.
+    #>
+    if ($script:WorkScopeNativeCanonicalizerReady) { return $true }
+    Wait-WorkScopeNativeCanonicalizerCompile
+    if ($null -eq ('WorkScope.NativeCanonicalizer' -as [type])) {
+        try {
+            Add-Type -TypeDefinition $script:WorkScopeNativeCanonicalizerSource
+        }
+        catch {
+            # A host that cannot compile keeps the PowerShell path rather than failing a read.
+            return $false
+        }
+    }
+    $script:WorkScopeNativeCanonicalizerReady = $true
+    return $true
+}
+
+function ConvertTo-WorkScopeCanonicalArrayElement {
+    <#
+        An array element reached the reference canonicalizer through a pipeline, so it
+        arrived PSObject-wrapped and matched `-is [pscustomobject]` before the
+        dictionary test could ever be re-reached for a scalar. This reproduces that
+        dispatch exactly: a dictionary element still canonicalises as a dictionary,
+        and everything else canonicalises as its property bag.
+    #>
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) { return ConvertTo-WorkScopeCanonicalValue -Value $Value }
+    if ($Value -is [string]) { return [ordered]@{ Length = $Value.Length } }
+    $ordered = [ordered]@{}
+    foreach ($property in @([psobject]::AsPSObject($Value).PSObject.Properties | Sort-Object Name)) {
+        $ordered[$property.Name] = ConvertTo-WorkScopeCanonicalValue -Value $property.Value
+    }
+    return $ordered
+}
+
+function Get-WorkScopeEventHash {
+    <#
+        `-Expected` is how a *verifier* asks for this hash, and it exists so the tuned
+        canonicalizer can never move a verdict.
+
+        Without it the hash is computed the way it has always been computed, through
+        the reference canonicalizer. Every hash this module WRITES takes that path, so
+        the bytes recorded in an event log are produced by the same algorithm before
+        and after this change and no stored chain is re-anchored.
+
+        With it the tuned canonicalizer runs first. A match with the stored hash ends
+        the check; a mismatch is re-computed through the reference implementation and
+        that answer is authoritative. So the tuned path can only ever ACCEPT what the
+        reference would accept -- accepting a payload the reference would reject would
+        require producing the stored 256-bit digest from different canonical bytes,
+        which is a SHA-256 collision -- and it can never reject what the reference
+        would accept, because a rejection is always re-decided by the reference. The
+        verdict is therefore identical by construction, not by testing.
+    #>
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary]$Event,
+        [string]$Expected,
+        $ValidationContext
+    )
+    $cacheKey = $null
+    if ($null -ne $ValidationContext -and -not [string]::IsNullOrWhiteSpace([string]$Event.event_id) -and
+        -not [string]::IsNullOrWhiteSpace([string]$Event.event_hash)) {
+        $cacheKey = "$($Event.event_id)|$($Event.event_hash)"
+        if ($ValidationContext.EventHashCache.ContainsKey($cacheKey)) {
+            $ValidationContext.Counters.event_hash_cache_hits = [int]$ValidationContext.Counters.event_hash_cache_hits + 1
+            return $ValidationContext.EventHashCache[$cacheKey]
+        }
+    }
+    $hash = $null
+    if ($PSBoundParameters.ContainsKey('Expected')) {
+        # An event being verified was itself parsed out of the log by ConvertFrom-Json,
+        # so the ConvertTo-Json/ConvertFrom-Json normalisation below is re-normalising
+        # something already normalised. Skipping it is worth 404 ms across this
+        # repository's 1,505 events and needs no argument that it is always a no-op:
+        # a hash that then fails to match is simply recomputed the long way.
+        $shell = [ordered]@{
+            event_id = $Event.event_id
+            previous_event_id = $Event.previous_event_id
+            previous_event_hash = $Event.previous_event_hash
+            state_revision = [int64]$Event.state_revision
+            occurred_at = $Event.occurred_at
+            type = $Event.type
+            project_id = $Event.project_id
+            track_id = $Event.track_id
+            capability_id = $Event.capability_id
+            cell_id = $Event.cell_id
+            evidence = @($Event.evidence)
+            data = $Event.data
+        }
+        $canonicalFast = $null
+        if ($script:WorkScopeNativeCanonicalizerReady) {
+            try { $canonicalFast = [WorkScope.NativeCanonicalizer]::Canonicalize($shell) }
+            catch { $canonicalFast = $null }
+        }
+        if ($null -eq $canonicalFast) {
+            $canonicalFast = ConvertTo-WorkScopeCanonicalValue -Value $shell
+        }
+        $fastBytes = [System.Text.Encoding]::UTF8.GetBytes(($canonicalFast | ConvertTo-Json -Depth 30 -Compress))
+        $fast = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($fastBytes)).ToLowerInvariant()
+        if ($fast -eq $Expected) { $hash = $fast }
+    }
+    if ($null -eq $hash) {
+        $Event = $Event |
+            ConvertTo-Json -Depth 30 -Compress |
+            ConvertFrom-Json -AsHashtable
+        $canonical = [ordered]@{
+            event_id = $Event.event_id
+            previous_event_id = $Event.previous_event_id
+            previous_event_hash = $Event.previous_event_hash
+            state_revision = [int64]$Event.state_revision
+            occurred_at = $Event.occurred_at
+            type = $Event.type
+            project_id = $Event.project_id
+            track_id = $Event.track_id
+            capability_id = $Event.capability_id
+            cell_id = $Event.cell_id
+            evidence = @($Event.evidence)
+            data = $Event.data
+        }
+        $referenceBytes = [System.Text.Encoding]::UTF8.GetBytes(
+            ((ConvertTo-WorkScopeCanonicalValueReference -Value $canonical) | ConvertTo-Json -Depth 30 -Compress))
+        $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($referenceBytes)).ToLowerInvariant()
+    }
+    if ($null -ne $ValidationContext) {
+        $ValidationContext.Counters.event_hash_computations = [int]$ValidationContext.Counters.event_hash_computations + 1
+        if ($null -ne $cacheKey) { $ValidationContext.EventHashCache[$cacheKey] = $hash }
+    }
+    return $hash
 }
 
 function Assert-SafeWorkScopeId {
@@ -101,6 +546,117 @@ function Get-WorkScopeStringArrayHash {
     $json = ConvertTo-Json -InputObject @($Values) -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
     return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
+function Test-WorkScopeGitTrackedTextPath {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        $ValidationContext
+    )
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $cache = if ($null -ne $ValidationContext -and
+        $null -ne $ValidationContext.PSObject.Properties['SnapshotTextPolicyCache']) {
+        $ValidationContext.SnapshotTextPolicyCache
+    }
+    else { $null }
+    if ($null -ne $cache -and $cache.ContainsKey($fullPath)) {
+        if ($null -ne $ValidationContext.PSObject.Properties['Counters']) {
+            $ValidationContext.Counters.snapshot_text_policy_cache_hits = [int]$ValidationContext.Counters.snapshot_text_policy_cache_hits + 1
+        }
+        return [bool]$cache[$fullPath]
+    }
+
+    # Work Scope accepts an eol-equivalent rewrite only when Git itself declares the
+    # *tracked* path text.  Attribute-unspecified paths stay byte-exact deliberately:
+    # an ASCII binary payload cannot be detected safely from bytes alone.
+    $isTrackedText = $false
+    try {
+        $directory = Split-Path -Parent $fullPath
+        $fileName = Split-Path -Leaf $fullPath
+        $eolLine = @(& git -C $directory ls-files --eol -- $fileName 2>$null)
+        if ($null -ne $ValidationContext -and $null -ne $ValidationContext.PSObject.Properties['Counters']) {
+            $ValidationContext.Counters.snapshot_git_queries = [int]$ValidationContext.Counters.snapshot_git_queries + 1
+        }
+        if ($LASTEXITCODE -eq 0 -and $eolLine.Count -eq 1) {
+            $attribute = [regex]::Match([string]$eolLine[0], '\battr/(?<value>[^\s]*)\s')
+            if ($attribute.Success) {
+                $isTrackedText = $attribute.Groups['value'].Value -match '^(?:text|text=auto|eol=(?:lf|crlf))$'
+            }
+        }
+    }
+    catch {
+        # A generated, non-Git, or unavailable-Git workspace cannot establish the
+        # text declaration, so it stays byte-exact instead of guessing from content.
+        $isTrackedText = $false
+    }
+    if ($null -ne $cache) { $cache[$fullPath] = $isTrackedText }
+    return $isTrackedText
+}
+
+# Compiled on first use, not on import.
+#
+# Importing this module used to pay a Roslyn compile for this type and for
+# NativeProcessRunner below on EVERY invocation -- 519 ms and 295 ms measured on this
+# host, against 144 ms for the rest of the import -- and the overwhelmingly common
+# invocation, a state validation, needs neither. CrlfNormalizer is reached only from
+# Get-WorkScopeFileSnapshot for a Git-declared text path, and NativeProcessRunner only
+# when a verification actually runs a program. Both still compile exactly once per
+# process, on the first call that needs them.
+function Initialize-WorkScopeCrlfNormalizer {
+    if ($null -ne ('WorkScope.CrlfNormalizer' -as [type])) { return }
+    Wait-WorkScopeNativeCanonicalizerCompile
+    Add-Type -TypeDefinition @'
+using System;
+
+namespace WorkScope
+{
+    public static class CrlfNormalizer
+    {
+        public static byte[] Normalize(byte[] source)
+        {
+            int pairs = 0;
+            for (int i = 0; i + 1 < source.Length; i++)
+            {
+                if (source[i] == 13 && source[i + 1] == 10) { pairs++; i++; }
+            }
+            if (pairs == 0) return source;
+
+            var destination = new byte[source.Length - pairs];
+            int from = 0;
+            int to = 0;
+            for (int i = 0; i + 1 < source.Length; i++)
+            {
+                if (source[i] != 13 || source[i + 1] != 10) continue;
+                int length = i - from;
+                if (length > 0) Buffer.BlockCopy(source, from, destination, to, length);
+                to += length;
+                destination[to++] = 10;
+                from = i + 2;
+                i++;
+            }
+            int remainder = source.Length - from;
+            if (remainder > 0) Buffer.BlockCopy(source, from, destination, to, remainder);
+            return destination;
+        }
+    }
+}
+'@
+}
+
+function Get-WorkScopeFileSnapshot {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        $ValidationContext
+    )
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if (Test-WorkScopeGitTrackedTextPath -Path $Path -ValidationContext $ValidationContext) {
+        Initialize-WorkScopeCrlfNormalizer
+        $bytes = [WorkScope.CrlfNormalizer]::Normalize($bytes)
+    }
+    return [pscustomobject]@{
+        sha256 = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        size_bytes = [int64]$bytes.Length
+    }
 }
 
 # Verification must run a native program image, never an interpreted wrapper whose
@@ -164,7 +720,9 @@ function Test-WorkScopeDeclaredInterpreter {
     return ($name -in @('pwsh', 'powershell', 'pwsh.exe', 'powershell.exe'))
 }
 
-if ($null -eq ('WorkScope.NativeProcessRunner' -as [type])) {
+function Initialize-WorkScopeNativeProcessRunner {
+    if ($null -ne ('WorkScope.NativeProcessRunner' -as [type])) { return }
+    Wait-WorkScopeNativeCanonicalizerCompile
     Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -308,8 +866,24 @@ function Test-StructuredEvidence {
     param(
         $Evidence,
         [string]$Root,
-        [switch]$RequireProvenance
+        [switch]$RequireProvenance,
+        # Set when re-reading a receipt that belongs to something already terminal -- a closed
+        # cell, a closed task -- rather than when accepting one at closure time. It skips the
+        # re-hash of the files the stored execution record NAMES, and nothing else: the record's
+        # own hash, the provenance event, and every field cross-check still hold, so a tampered
+        # or mismatched receipt is caught exactly as before. See the note at that re-hash for why
+        # the distinction is the whole fix.
+        [switch]$Historical,
+        # Used only by the explicit retire-task recovery path after Douglas approves
+        # superseding a closed result artifact. Receipt bytes, provenance, event binding,
+        # schema, and every unrelated error remain mandatory; only live result-artifact
+        # snapshots are omitted from this one classification pass.
+        [switch]$RetirementArtifactDrift,
+        $ValidationContext
     )
+    if ($RetirementArtifactDrift -and -not $Historical) {
+        return $false
+    }
     $items = @(ConvertTo-NormalizedArray $Evidence)
     if ($items.Count -eq 0) {
         return $false
@@ -347,12 +921,18 @@ function Test-StructuredEvidence {
         }
         if (-not [string]::IsNullOrWhiteSpace($Root)) {
             try {
-                $relativeReference = Resolve-WorkScopeArtifact -Root $Root -Artifact ([string]$item.reference)
+                $relativeReference = Resolve-WorkScopeCachedArtifact -Root $Root -Artifact ([string]$item.reference) -ValidationContext $ValidationContext
             }
             catch {
                 return $false
             }
-            $referencePath = Join-Path $Root $relativeReference
+            # `Join-Path` is a cmdlet and this line runs once per receipt: 0.102 ms
+            # against 0.007 ms for the framework call, 78 ms across this repository's
+            # 771 receipts. The two differ only when the right operand is rooted, and
+            # `Resolve-WorkScopeCachedArtifact` above has already refused a rooted or
+            # escaping reference, so what arrives here is project-relative by
+            # construction. Every other `Join-Path` in this module keeps the cmdlet.
+            $referencePath = [System.IO.Path]::Combine($Root, $relativeReference)
             # Closure evidence is a proof, so it is pinned to the exact bytes it was
             # taken against and drift invalidates it. Discovery evidence is only
             # provenance -- where the item was noticed -- and pinning it to a hash
@@ -391,13 +971,21 @@ function Test-StructuredEvidence {
                     return $false
                 }
                 try {
-                    $record = Get-Content -LiteralPath $referencePath -Raw | ConvertFrom-Json -AsHashtable
-                    $eventsPath = Join-Path $Root '.agents\work\events.jsonl'
-                    $provenanceEvent = Get-Content -LiteralPath $eventsPath |
-                        Where-Object { $_ } |
-                        ForEach-Object { $_ | ConvertFrom-Json -AsHashtable } |
-                        Where-Object { $_.event_id -eq $item.provenance_event_id -and $_.type -eq 'verification_executed' } |
-                        Select-Object -First 1
+                    $record = if ($null -ne $ValidationContext -and $ValidationContext.ReceiptCache.ContainsKey($referencePath)) {
+                        $ValidationContext.Counters.receipt_cache_hits = [int]$ValidationContext.Counters.receipt_cache_hits + 1
+                        $ValidationContext.ReceiptCache[$referencePath]
+                    } else {
+                        $loaded = Get-Content -LiteralPath $referencePath -Raw | ConvertFrom-Json -AsHashtable
+                        if ($null -ne $ValidationContext) {
+                            $ValidationContext.ReceiptCache[$referencePath] = $loaded
+                            $ValidationContext.Counters.receipt_loads = [int]$ValidationContext.Counters.receipt_loads + 1
+                        }
+                        $loaded
+                    }
+                    $provenanceEvent = Get-WorkScopeValidationEventById -Root $Root -EventId ([string]$item.provenance_event_id) -Context $ValidationContext
+                    if ($null -ne $provenanceEvent -and $provenanceEvent.type -ne 'verification_executed') {
+                        $provenanceEvent = $null
+                    }
                 }
                 catch {
                     return $false
@@ -425,9 +1013,62 @@ function Test-StructuredEvidence {
                     [int64]$provenanceEvent.data.exit_code -ne 0) {
                     return $false
                 }
-                foreach ($artifactSnapshot in @($record.verifier_inputs) + @($record.artifacts)) {
+                # A stored record names two different kinds of file and they do not deserve the
+                # same treatment once the task is terminal.
+                #
+                # An ARTIFACT is the proof itself -- the output the check produced. If it changes
+                # after closure the evidence no longer shows what it claims to show, so drift
+                # there stays an error forever. That is a deliberate, tested contract and this
+                # does not touch it.
+                #
+                # A VERIFIER INPUT is the tooling the check RAN: the script, its manifest. Editing
+                # it later does not falsify that the check passed when it ran; it only means the
+                # result would need re-taking. Enforcing it against the live tree made every file
+                # ever named by any closed check permanently uneditable, because state validation
+                # fails closed and every mutation validates first -- so the edit invalidated the
+                # whole state and blocked even the retire that would have released the binding.
+                # Hit on 2026-08-10 by two ordinary edits to Run-ToolTests.ps1 and its policy
+                # manifest, both of which were FIXING a defect, with no repair available from
+                # Reconcile-WorkState in either direction. The recorded hash is kept either way,
+                # so what the check ran against is still readable off the receipt.
+                # A file may be declared in both lists, and on a terminal task that pair is
+                # decisive rather than ambiguous: whatever else it is, it is the tooling this
+                # check ran, and naming it an artifact as well does not turn an input into an
+                # output. The live case was .agents/manifests/tool-test-policy.json, declared
+                # both ways by the task that gated the overnight run -- so releasing inputs
+                # alone left the state wedged on the same file through its other name, and the
+                # only unwedge would have been reverting the fix the edit was making.
+                $inputReferences = @(@($record.verifier_inputs) | ForEach-Object { [string]$_.reference })
+                $inputSnapshotsToVerify = if ($Historical) { @() } else { @($record.verifier_inputs) }
+                $artifactSnapshotsToVerify = if ($Historical -and $RetirementArtifactDrift) {
+                    @()
+                } else {
+                    # A path declared as a verifier input is always validated from its input
+                    # snapshot. It can also appear in the artifact list, whose content hash
+                    # intentionally normalizes text line endings; validating it under both
+                    # conventions makes a freshly executed receipt self-contradictory.
+                    @($record.artifacts) | Where-Object { $inputReferences -notcontains [string]$_.reference }
+                }
+                foreach ($inputSnapshot in $inputSnapshotsToVerify) {
                     try {
-                        $artifactReference = Resolve-WorkScopeArtifact -Root $Root -Artifact ([string]$artifactSnapshot.reference)
+                        $inputReference = Resolve-WorkScopeCachedArtifact -Root $Root -Artifact ([string]$inputSnapshot.reference) -ValidationContext $ValidationContext
+                        $inputPath = Join-Path $Root $inputReference
+                    }
+                    catch {
+                        return $false
+                    }
+                    if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
+                        return $false
+                    }
+                    $inputFileSnapshot = Get-WorkScopeFileSnapshot -Path $inputPath -ValidationContext $ValidationContext
+                    if ($inputFileSnapshot.sha256 -ne ([string]$inputSnapshot.sha256).ToLowerInvariant() -or
+                        [int64]$inputFileSnapshot.size_bytes -ne [int64]$inputSnapshot.size_bytes) {
+                        return $false
+                    }
+                }
+                foreach ($artifactSnapshot in $artifactSnapshotsToVerify) {
+                    try {
+                        $artifactReference = Resolve-WorkScopeCachedArtifact -Root $Root -Artifact ([string]$artifactSnapshot.reference) -ValidationContext $ValidationContext
                         $artifactPath = Join-Path $Root $artifactReference
                     }
                     catch {
@@ -436,10 +1077,9 @@ function Test-StructuredEvidence {
                     if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
                         return $false
                     }
-                    $artifactItem = Get-Item -LiteralPath $artifactPath -Force
-                    $artifactHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                    if ($artifactHash -ne ([string]$artifactSnapshot.sha256).ToLowerInvariant() -or
-                        [int64]$artifactItem.Length -ne [int64]$artifactSnapshot.size_bytes) {
+                    $artifactFileSnapshot = Get-WorkScopeFileSnapshot -Path $artifactPath -ValidationContext $ValidationContext
+                    if ($artifactFileSnapshot.sha256 -ne ([string]$artifactSnapshot.sha256).ToLowerInvariant() -or
+                        $artifactFileSnapshot.size_bytes -ne [int64]$artifactSnapshot.size_bytes) {
                         return $false
                     }
                 }
@@ -496,8 +1136,20 @@ function Invoke-WorkScopeVerification {
         [Parameter(Mandatory)] [string]$Subject,
         [Parameter(Mandatory)] [string]$Executable,
         [string[]]$Arguments = @(),
-        [string[]]$Artifacts = @()
+        [string[]]$Artifacts = @(),
+        # Only the closed-evidence repair path may execute a declared check while its
+        # previous result artifact has drifted.  It does not relax any receipt, event,
+        # input, scope, or unrelated-state validation.
+        [switch]$AllowClosedArtifactDrift,
+        # A later execution may replace closed evidence only when the declared command still
+        # matches exactly, but the files that command reads have legitimately advanced.  The
+        # replacement receipt then preserves both the historical declaration and the current
+        # input snapshots.  This is deliberately separate from result-artifact drift.
+        [switch]$AllowClosedVerifierInputDrift
     )
+    if ($AllowClosedVerifierInputDrift -and -not $AllowClosedArtifactDrift) {
+        throw 'AllowClosedVerifierInputDrift requires AllowClosedArtifactDrift and the closed-evidence repair path.'
+    }
     Assert-SafeWorkScopeId -Id $CheckId -Label 'Verification check id'
     $rootFull = [System.IO.Path]::GetFullPath($Root)
     $executablePath = Resolve-WorkScopeNativeExecutable -Executable $Executable
@@ -510,10 +1162,6 @@ function Invoke-WorkScopeVerification {
     )
 
     $snapshot = Invoke-WithWorkScopeLock -Root $rootFull -Action {
-        $validation = Test-WorkScopeState -Root $rootFull
-        if (-not $validation.valid) {
-            throw "Cannot execute verification against invalid authoritative state: $($validation.errors -join '; ')"
-        }
         $state = Read-WorkScopeState -Root $rootFull
         $matches = @(
             foreach ($task in @($state.active.tasks)) {
@@ -528,6 +1176,26 @@ function Invoke-WorkScopeVerification {
             throw "Verification check '$CheckId' must identify exactly one declared task acceptance check in the active scope cell."
         }
         $match = $matches[0]
+        $validation = Test-WorkScopeState -Root $rootFull
+        $recoverableClosedTaskIds = @($state.active.tasks | Where-Object {
+            $_.status -eq 'closed' -and
+            (Test-StructuredEvidence -Evidence $_.evidence -Root $rootFull -RequireProvenance -Historical -RetirementArtifactDrift)
+        } | ForEach-Object { [string]$_.id })
+        $repairableClosedArtifactDrift = (
+            $AllowClosedArtifactDrift -and
+            $state.active.status -in @('active', 'closed') -and
+            $match.task.status -eq 'closed' -and
+            (Test-StructuredEvidence -Evidence $match.task.evidence -Root $rootFull -RequireProvenance -Historical -RetirementArtifactDrift) -and
+            ($state.active.status -eq 'active' -or (Test-StructuredEvidence -Evidence $state.active.evidence -Root $rootFull -RequireProvenance -Historical -RetirementArtifactDrift)) -and
+            @($validation.errors | Where-Object {
+                $errorText = [string]$_
+                $matchesRepairTask = @($recoverableClosedTaskIds | Where-Object { $errorText -eq "Closed task '$_' has missing or invalid structured evidence." }).Count -gt 0
+                $errorText -ne 'Closed scope cell has missing or invalid structured evidence.' -and -not $matchesRepairTask
+            }).Count -eq 0
+        )
+        if (-not $validation.valid -and -not $repairableClosedArtifactDrift) {
+            throw "Cannot execute verification against invalid authoritative state: $($validation.errors -join '; ')"
+        }
         if ($Subject -ne $match.task.id) {
             throw "Verification subject '$Subject' does not match the declared task '$($match.task.id)'."
         }
@@ -551,24 +1219,43 @@ function Invoke-WorkScopeVerification {
             timeout_seconds = [int]$match.check.timeout_seconds
             max_output_bytes = [int64]$match.check.max_output_bytes
             verifier_inputs = @($match.check.verifier_inputs)
+            closed_repair_eligible = (
+                $AllowClosedArtifactDrift -and
+                $state.active.status -in @('active', 'closed') -and
+                $match.task.status -eq 'closed'
+            )
         }
     }
 
+    # File bytes are never cached across child execution. The preflight inputs and
+    # post-run artifacts each receive a fresh policy cache in case the check itself
+    # changed Git attributes while it ran.
+    $preExecutionSnapshotContext = New-WorkScopeValidationContext -Root $rootFull
+    $currentVerifierInputs = [System.Collections.Generic.List[object]]::new()
+    $verifierInputDrifted = $false
     foreach ($inputSnapshot in @($snapshot.verifier_inputs)) {
         $inputReference = Resolve-WorkScopeArtifact -Root $rootFull -Artifact ([string]$inputSnapshot.reference)
         $inputPath = Join-Path $rootFull $inputReference
         if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
             throw "Declared verification input '$inputReference' is missing."
         }
-        $inputItem = Get-Item -LiteralPath $inputPath -Force
-        $inputHash = (Get-FileHash -LiteralPath $inputPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($inputHash -ne $inputSnapshot.sha256 -or
-            [int64]$inputItem.Length -ne [int64]$inputSnapshot.size_bytes) {
-            throw "Declared verification input '$inputReference' changed after task declaration."
+        $inputSnapshotNow = Get-WorkScopeFileSnapshot -Path $inputPath -ValidationContext $preExecutionSnapshotContext
+        $currentVerifierInputs.Add([ordered]@{
+            reference = $inputReference
+            sha256 = $inputSnapshotNow.sha256
+            size_bytes = [int64]$inputSnapshotNow.size_bytes
+        })
+        if ($inputSnapshotNow.sha256 -ne $inputSnapshot.sha256 -or
+            [int64]$inputSnapshotNow.size_bytes -ne [int64]$inputSnapshot.size_bytes) {
+            $verifierInputDrifted = $true
+            if (-not ($AllowClosedVerifierInputDrift -and $snapshot.closed_repair_eligible)) {
+                throw "Declared verification input '$inputReference' changed after task declaration."
+            }
         }
     }
 
     $startedAt = Get-UtcTimestamp
+    Initialize-WorkScopeNativeProcessRunner
     try {
         $processResult = [WorkScope.NativeProcessRunner]::Run(
             $executablePath,
@@ -592,17 +1279,18 @@ function Invoke-WorkScopeVerification {
     $finishedAt = Get-UtcTimestamp
     $exitCode = [int]$processResult.ExitCode
     $receiptId = [guid]::NewGuid().ToString()
+    $postExecutionSnapshotContext = New-WorkScopeValidationContext -Root $rootFull
     $artifactSnapshots = @(
         foreach ($relativeArtifact in $normalizedArtifacts) {
             $artifactPath = Join-Path $rootFull $relativeArtifact
             if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
                 throw "Verification artifact '$relativeArtifact' must be an existing project-local file."
             }
-            $artifactItem = Get-Item -LiteralPath $artifactPath -Force
+            $artifactFileSnapshot = Get-WorkScopeFileSnapshot -Path $artifactPath -ValidationContext $postExecutionSnapshotContext
             [ordered]@{
                 reference = $relativeArtifact
-                sha256 = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                size_bytes = [int64]$artifactItem.Length
+                sha256 = $artifactFileSnapshot.sha256
+                size_bytes = $artifactFileSnapshot.size_bytes
             }
         }
     )
@@ -630,7 +1318,8 @@ function Invoke-WorkScopeVerification {
         output_limit_exceeded = [bool]$processResult.OutputLimitExceeded
         timeout_seconds = [int]$snapshot.timeout_seconds
         max_output_bytes = [int64]$snapshot.max_output_bytes
-        verifier_inputs = @($snapshot.verifier_inputs)
+        verifier_inputs = @($currentVerifierInputs)
+        declared_verifier_inputs = if ($verifierInputDrifted) { @($snapshot.verifier_inputs) } else { $null }
         artifacts = $artifactSnapshots
         exit_code = $exitCode
         started_at = $startedAt
@@ -643,7 +1332,23 @@ function Invoke-WorkScopeVerification {
     try {
         $event = Invoke-WithWorkScopeLock -Root $rootFull -Action {
             $validation = Test-WorkScopeState -Root $rootFull
-            if (-not $validation.valid) {
+            $state = Read-WorkScopeState -Root $rootFull
+            $recoverableClosedTaskIds = @($state.active.tasks | Where-Object {
+                $_.status -eq 'closed' -and
+                (Test-StructuredEvidence -Evidence $_.evidence -Root $rootFull -RequireProvenance -Historical -RetirementArtifactDrift)
+            } | ForEach-Object { [string]$_.id })
+            $repairableClosedArtifactDrift = (
+                $AllowClosedArtifactDrift -and
+                $state.active.status -in @('active', 'closed') -and
+                $null -ne ($state.active.tasks | Where-Object { $_.id -eq $snapshot.task_id -and $_.status -eq 'closed' } | Select-Object -First 1) -and
+                ($state.active.status -eq 'active' -or (Test-StructuredEvidence -Evidence $state.active.evidence -Root $rootFull -RequireProvenance -Historical -RetirementArtifactDrift)) -and
+                @($validation.errors | Where-Object {
+                    $errorText = [string]$_
+                    $matchesRepairTask = @($recoverableClosedTaskIds | Where-Object { $errorText -eq "Closed task '$_' has missing or invalid structured evidence." }).Count -gt 0
+                    $errorText -ne 'Closed scope cell has missing or invalid structured evidence.' -and -not $matchesRepairTask
+                }).Count -eq 0
+            )
+            if (-not $validation.valid -and -not $repairableClosedArtifactDrift) {
                 throw "Verification finished, but authoritative state became invalid before its receipt could be committed: $($validation.errors -join '; ')"
             }
             $state = Read-WorkScopeState -Root $rootFull
@@ -663,6 +1368,10 @@ function Invoke-WorkScopeVerification {
                 sha256 = $recordHash
                 size_bytes = [int64]$recordItem.Length
                 exit_code = $exitCode
+                closed_artifact_drift_repair_task_id = if ($AllowClosedArtifactDrift) { $snapshot.task_id } else { $null }
+                closed_verifier_input_drift_repair_task_id = if ($verifierInputDrifted) { $snapshot.task_id } else { $null }
+                declared_verifier_inputs = if ($verifierInputDrifted) { @($snapshot.verifier_inputs) } else { @() }
+                current_verifier_inputs = if ($verifierInputDrifted) { @($currentVerifierInputs) } else { @() }
             } -FileCommit @{
                 temporary_path = $temporaryRecordPath
                 final_path = $recordPath
@@ -692,7 +1401,8 @@ function Resolve-WorkScopeClosureEvidence {
     param(
         [Parameter(Mandatory)] [string]$Root,
         [Parameter(Mandatory)] $Evidence,
-        [string]$Context = 'Closure'
+        [string]$Context = 'Closure',
+        [switch]$Historical
     )
     $receipts = [System.Collections.Generic.List[object]]::new()
     $seenReceiptIds = [System.Collections.Generic.HashSet[string]]::new(
@@ -753,7 +1463,7 @@ function Resolve-WorkScopeClosureEvidence {
             task_id = $record.task_id
         })
     }
-    if ($receipts.Count -eq 0 -or -not (Test-StructuredEvidence -Evidence $receipts -Root $Root -RequireProvenance)) {
+    if ($receipts.Count -eq 0 -or -not (Test-StructuredEvidence -Evidence $receipts -Root $Root -RequireProvenance -Historical:$Historical)) {
         throw "$Context requires at least one valid executed verification receipt."
     }
     return @($receipts)
@@ -784,27 +1494,71 @@ function Assert-WorkScopeTaskReceiptCoverage {
 }
 
 function Get-WorkScopePhysicalPath {
+    <#
+        Same reparse-point-resolving walk as before, expressed without cmdlets.
+
+        This is the single hottest function in state validation and nothing about it
+        needed a pipeline: every segment of every artifact path paid a `Test-Path`
+        plus a `Get-Item -Force`, and `Resolve-WorkScopeArtifact` calls this twice per
+        artifact -- once for the candidate and once for the project root, which is the
+        same answer every time. Measured over this repository's 771 discovery
+        references: 8.4 ms per resolve, 6.5 s in total, against 0.37 ms and 285 ms for
+        the identical walk over `DirectoryInfo`/`FileInfo`, with the same output for
+        every one of them.
+
+        The memo is per validation pass, not per process: `New-WorkScopeValidationContext`
+        clears it, and every guarded mutation builds a context before it writes, so a
+        reparse point created between two passes is seen by the next one. Within one
+        pass the answers were already assumed stable -- the artifact and receipt caches
+        beside it make the same assumption.
+
+        It memoises every ANCESTOR of a resolved path, not only the path asked for.
+        Keying the whole path alone meant each new artifact re-walked the ten or so
+        leading segments it shared with the artifact before it -- two filesystem stats
+        a segment, from the drive root, once per distinct reference. Every entry it
+        writes is the answer this function would return if asked for that ancestor
+        directly, so a later call resumes from the longest known ancestor and stats
+        only what is genuinely new. It is the same walk, the same reparse-point
+        resolution and the same per-pass staleness window; only the redundant repeats
+        are gone.
+    #>
     param([Parameter(Mandatory)] [string]$Path)
     $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $memo = $script:WorkScopePhysicalPathCache[$fullPath]
+    if ($null -ne $memo) { return $memo }
     $pathRoot = [System.IO.Path]::GetPathRoot($fullPath)
+    # `$current` stays untrimmed while walking: trimming the drive root to 'C:' would
+    # make the next Combine produce a drive-relative path.
     $current = $pathRoot
+    $ancestor = $pathRoot
     $remainder = $fullPath.Substring($pathRoot.Length)
-    foreach ($segment in @($remainder -split '[\\/]' | Where-Object { $_ })) {
-        $candidate = Join-Path $current $segment
-        if (Test-Path -LiteralPath $candidate) {
-            $item = Get-Item -LiteralPath $candidate -Force
+    foreach ($segment in $remainder.Split([char[]]@('\', '/'), [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        $ancestor = [System.IO.Path]::Combine($ancestor, $segment)
+        $known = $script:WorkScopePhysicalPathCache[$ancestor]
+        if ($null -ne $known) {
+            $current = $known
+            continue
+        }
+        $candidate = [System.IO.Path]::Combine($current, $segment)
+        $item = [System.IO.DirectoryInfo]::new($candidate)
+        if (-not $item.Exists) { $item = [System.IO.FileInfo]::new($candidate) }
+        if ($item.Exists) {
             if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
                 $target = $item.ResolveLinkTarget($true)
                 if ($null -eq $target) {
                     throw "Reparse point '$candidate' cannot be resolved safely."
                 }
                 $current = [System.IO.Path]::GetFullPath($target.FullName)
+                $script:WorkScopePhysicalPathCache[$ancestor] = [System.IO.Path]::GetFullPath($current).TrimEnd('\', '/')
                 continue
             }
         }
         $current = $candidate
+        $script:WorkScopePhysicalPathCache[$ancestor] = $current.TrimEnd('\', '/')
     }
-    return [System.IO.Path]::GetFullPath($current).TrimEnd('\', '/')
+    $resolved = [System.IO.Path]::GetFullPath($current).TrimEnd('\', '/')
+    $script:WorkScopePhysicalPathCache[$fullPath] = $resolved
+    return $resolved
 }
 
 function Resolve-WorkScopeArtifact {
@@ -817,12 +1571,16 @@ function Resolve-WorkScopeArtifact {
     }
     $projectRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
     $projectPrefix = $projectRoot + [System.IO.Path]::DirectorySeparatorChar
-    $candidate = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $Artifact))
+    # `Combine` differs from `Join-Path` only when the right operand is rooted, and the
+    # guard above has already thrown on a rooted artifact, so the two are the same call
+    # here at a fifteenth of the cost. The boundary check below is unchanged and still
+    # decides whether the resolved path is inside the project.
+    $candidate = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($projectRoot, $Artifact))
     if (-not $candidate.StartsWith($projectPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Artifact '$Artifact' resolves outside the project boundary."
     }
     $relative = [System.IO.Path]::GetRelativePath($projectRoot, $candidate).Replace('\', '/')
-    if ($relative -in @('.', '..') -or $relative.StartsWith('../')) {
+    if ($relative -eq '.' -or $relative -eq '..' -or $relative.StartsWith('../')) {
         throw "Artifact '$Artifact' resolves outside the project boundary."
     }
     $physicalRoot = Get-WorkScopePhysicalPath -Path $projectRoot
@@ -1018,6 +1776,37 @@ function Get-StateCapability {
     return ($track.capabilities | Where-Object { $_.id -eq $CapabilityId } | Select-Object -First 1)
 }
 
+function Get-WorkScopeCompletion {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$Root)
+
+    $state = Read-WorkScopeState -Root $Root
+    $milestone = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
+    if ($null -eq $milestone) {
+        throw "Active capability '$($state.active.capability_id)' does not exist."
+    }
+
+    $remainingCapabilities = @(
+        foreach ($track in @($state.tracks)) {
+            foreach ($capability in @($track.capabilities | Where-Object { $_.status -ne 'closed' })) {
+                [pscustomobject]@{
+                    track_id = $track.id
+                    capability_id = $capability.id
+                    status = $capability.status
+                }
+            }
+        }
+    )
+
+    return [pscustomobject]@{
+        milestone_complete = ($state.active.status -eq 'closed' -and $milestone.status -eq 'closed')
+        milestone_track_id = $state.active.track_id
+        milestone_capability_id = $milestone.id
+        project_complete = ($remainingCapabilities.Count -eq 0)
+        remaining_capabilities = $remainingCapabilities
+    }
+}
+
 function Read-WorkScopeState {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string]$Root)
@@ -1052,12 +1841,169 @@ function Add-WorkScopeEvent {
         [Parameter(Mandatory)] [string]$Type,
         $Evidence = @(),
         [hashtable]$Data = @{},
-        [hashtable]$FileCommit
+        [hashtable]$FileCommit,
+        $ValidationContext
     )
     $paths = Get-WorkScopePaths -Root $Root
-    $authoritativeValidation = Test-WorkScopeState -Root $Root
+    if ($null -eq $ValidationContext) { $ValidationContext = New-WorkScopeValidationContext -Root $paths.Root }
+    $authoritativeValidation = Test-WorkScopeState -Root $Root -ValidationContext $ValidationContext
+    $outstandingReadyInputDriftTaskIds = @()
     if (-not $authoritativeValidation.valid) {
-        throw "Authoritative state or event chain is invalid before mutation: $($authoritativeValidation.errors -join '; ')"
+        # Retirement is the supported recovery for a mis-declared live check, including one
+        # whose immutable input has already drifted or disappeared. In that case the disk
+        # state is invalid precisely because the binding retirement is about to release.
+        # Admit only those errors for this event's target task; candidate validation below
+        # still has to pass, and every schema, event-chain, or unrelated-task error stays
+        # fail-closed.
+        $unrelatedAuthoritativeErrors = @($authoritativeValidation.errors)
+        if ($Type -eq 'task_retired' -and -not [string]::IsNullOrWhiteSpace([string]$Data.task_id)) {
+            $retirementTaskIds = @(
+                @([string]$Data.task_id) + @($Data.related_task_ids) |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+                    ForEach-Object { [string]$_ } |
+                    Sort-Object -Unique
+            )
+            $closedArtifactDriftTaskIds = @($Data.closed_artifact_drift_task_ids)
+            if ($closedArtifactDriftTaskIds.Count -eq 0 -and $Data.closed_artifact_drift -eq $true) {
+                $closedArtifactDriftTaskIds = @([string]$Data.task_id)
+            }
+            foreach ($retirementTaskId in $retirementTaskIds) {
+                $escapedTaskId = [regex]::Escape($retirementTaskId)
+                $recoverableInputError = "^Task '$escapedTaskId' verification input '.+' (?:is missing|changed after declaration)\.$"
+                $unrelatedAuthoritativeErrors = @($unrelatedAuthoritativeErrors | Where-Object { $_ -notmatch $recoverableInputError })
+                $targetTask = $State.active.tasks | Where-Object { $_.id -eq $retirementTaskId } | Select-Object -First 1
+                $closedArtifactRecoveryIsValid = (
+                    $closedArtifactDriftTaskIds -contains $retirementTaskId -and
+                    $null -ne $targetTask -and
+                    (Test-StructuredEvidence -Evidence $targetTask.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift)
+                )
+                if ($closedArtifactRecoveryIsValid) {
+                    $recoverableClosedEvidenceError = "^Closed task '$escapedTaskId' has missing or invalid structured evidence\.$"
+                    $unrelatedAuthoritativeErrors = @($unrelatedAuthoritativeErrors | Where-Object { $_ -notmatch $recoverableClosedEvidenceError })
+                }
+            }
+
+            # Two ready checks can bind the same mutable verifier file. Retiring the first
+            # must not require retiring the second as an unrelated batch: the first event is
+            # permitted to release its one binding, but the untouched task remains visibly
+            # invalid and every non-retirement mutation stays fail-closed. Record those
+            # outstanding ready-task drifts on this event so the next retirement can account
+            # for precisely the remaining binding rather than treating the state as repaired.
+            $storedState = Read-WorkScopeState -Root $Root
+            foreach ($storedTask in @($storedState.active.tasks | Where-Object {
+                $_.status -eq 'ready' -and $retirementTaskIds -notcontains $_.id
+            })) {
+                $escapedTaskId = [regex]::Escape([string]$storedTask.id)
+                $recoverableInputError = "^Task '$escapedTaskId' verification input '.+' (?:is missing|changed after declaration)\.$"
+                if (@($unrelatedAuthoritativeErrors | Where-Object { $_ -match $recoverableInputError }).Count -gt 0) {
+                    $outstandingReadyInputDriftTaskIds += [string]$storedTask.id
+                    $unrelatedAuthoritativeErrors = @($unrelatedAuthoritativeErrors | Where-Object { $_ -notmatch $recoverableInputError })
+                }
+            }
+        }
+        if ($Type -eq 'scope_cell_closed' -and $Data.target_depth_recovery -eq $true) {
+            # A pre-2026-08-11 expand selection could reuse an existing capability at a deeper
+            # entry depth without raising its target. That left an active selector-produced cell
+            # that can complete correctly, yet fails only when closure writes its deeper current
+            # depth. Admit that one historical shape here so the valid candidate below can repair
+            # it. Every other authoritative error remains fail-closed.
+            $storedState = Read-WorkScopeState -Root $Root
+            $storedCapability = Get-StateCapability -State $storedState -TrackId $storedState.active.track_id -CapabilityId $storedState.active.capability_id
+            $storedSelection = Get-WorkScopeActiveSelection -Root $Root -State $storedState
+            $matchesSelectorRecovery = (
+                $null -ne $storedCapability -and
+                $null -ne $storedSelection -and
+                $storedState.active.status -eq 'active' -and
+                $storedState.active.track_id -eq $State.active.track_id -and
+                $storedState.active.capability_id -eq $State.active.capability_id -and
+                $storedState.active.cell_id -eq $State.active.cell_id -and
+                $storedState.active.depth -eq $State.active.depth -and
+                $storedSelection.suggested_track -eq $storedState.active.track_id -and
+                $storedSelection.suggested_capability -eq $storedState.active.capability_id -and
+                $storedSelection.entry_depth -eq $storedState.active.depth -and
+                $Data.recovered_capability_id -eq $storedState.active.capability_id -and
+                $Data.previous_target_depth -eq $storedCapability.target_depth -and
+                $Data.recovered_target_depth -eq $storedState.active.depth -and
+                (ConvertTo-DepthIndex $storedState.active.depth) -gt (ConvertTo-DepthIndex $storedCapability.target_depth) -and
+                ($null -eq $storedCapability.current_depth -or
+                    (ConvertTo-DepthIndex $storedCapability.current_depth) -le (ConvertTo-DepthIndex $storedState.active.depth))
+            )
+            if ($matchesSelectorRecovery) {
+                $escapedCapabilityId = [regex]::Escape([string]$storedCapability.id)
+                $recoverableDepthError = "^Capability '$escapedCapabilityId' current depth exceeds target depth\\.$"
+                $unrelatedAuthoritativeErrors = @($unrelatedAuthoritativeErrors | Where-Object { $_ -notmatch $recoverableDepthError })
+            }
+        }
+        if ($Type -eq 'scope_cell_followup_started' -and
+            -not [string]::IsNullOrWhiteSpace([string]$Data.prior_cell_id) -and
+            -not [string]::IsNullOrWhiteSpace([string]$Data.prior_closure_event_id)) {
+            # A follow-up replaces a closed cell with a distinct active cell. Its prior proof
+            # remains immutable in the event chain, so a documented edit to a former result
+            # artifact must not prevent the transition that owns that edit.
+            $storedState = Read-WorkScopeState -Root $Root
+            $priorCell = $storedState.active
+            $priorEvidenceIsHistorical = (
+                $priorCell.status -eq 'closed' -and
+                $priorCell.cell_id -eq $Data.prior_cell_id -and
+                $priorCell.track_id -eq $Data.prior_track_id -and
+                $priorCell.capability_id -eq $Data.prior_capability_id -and
+                (Test-StructuredEvidence -Evidence $priorCell.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift) -and
+                @($priorCell.tasks | Where-Object {
+                    $_.status -eq 'closed' -and
+                    -not (Test-StructuredEvidence -Evidence $_.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift)
+                }).Count -eq 0
+            )
+            if ($priorEvidenceIsHistorical) {
+                $unrelatedAuthoritativeErrors = @($unrelatedAuthoritativeErrors | Where-Object {
+                    $_ -notmatch '^Closed scope cell has missing or invalid structured evidence\.$' -and
+                    $_ -notmatch "^Closed task '.*' has missing or invalid structured evidence\.$"
+                })
+            }
+        }
+        if ((($Type -eq 'verification_executed' -and -not [string]::IsNullOrWhiteSpace([string]$Data.closed_artifact_drift_repair_task_id)) -or
+             ($Type -eq 'closed_evidence_repaired' -and -not [string]::IsNullOrWhiteSpace([string]$Data.task_id)) -or
+             ($Type -eq 'closed_evidence_repaired_batch' -and @($Data.task_replacements).Count -gt 0))) {
+            if ($Type -eq 'closed_evidence_repaired_batch') {
+                $storedRepairState = Read-WorkScopeState -Root $Root
+                $repairTaskIds = @($Data.task_replacements | ForEach-Object { [string]$_.task_id })
+            }
+            elseif ($Type -eq 'verification_executed') {
+                # A replacement receipt is staged before the atomic repair event. Every
+                # drifted closed task in the same cell must remain admissible during that
+                # staging window, or the first receipt can never be created.
+                $storedRepairState = Read-WorkScopeState -Root $Root
+                $repairTaskIds = @($storedRepairState.active.tasks | Where-Object {
+                    $_.status -eq 'closed' -and
+                    (Test-StructuredEvidence -Evidence $_.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift)
+                } | ForEach-Object { [string]$_.id })
+            }
+            else {
+                $storedRepairState = $State
+                $repairTaskIds = @([string]$Data.task_id)
+            }
+            $repairTasks = @($storedRepairState.active.tasks | Where-Object { $repairTaskIds -contains [string]$_.id })
+            $repairable = (
+                $storedRepairState.active.status -in @('active', 'closed') -and
+                @($repairTaskIds).Count -gt 0 -and
+                @($repairTasks).Count -eq @($repairTaskIds).Count -and
+                @($repairTasks | Where-Object {
+                    $_.status -ne 'closed' -or
+                    -not (Test-StructuredEvidence -Evidence $_.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift)
+                }).Count -eq 0 -and
+                ($storedRepairState.active.status -eq 'active' -or (Test-StructuredEvidence -Evidence $storedRepairState.active.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift))
+            )
+            if ($repairable) {
+                $escapedTaskIds = @($repairTaskIds | ForEach-Object { [regex]::Escape($_) })
+                $unrelatedAuthoritativeErrors = @($unrelatedAuthoritativeErrors | Where-Object {
+                    $errorText = [string]$_
+                    $matchesRepairTask = @($escapedTaskIds | Where-Object { $errorText -match "^Closed task '$_' has missing or invalid structured evidence\.$" }).Count -gt 0
+                    $errorText -notmatch '^Closed scope cell has missing or invalid structured evidence\.$' -and -not $matchesRepairTask
+                })
+            }
+        }
+        if ($unrelatedAuthoritativeErrors.Count -gt 0) {
+            throw "Authoritative state or event chain is invalid before mutation: $($authoritativeValidation.errors -join '; ')"
+        }
     }
     $previousEventId = $State.last_event_id
     $previousEventHash = $State.last_event_hash
@@ -1075,11 +2021,57 @@ function Add-WorkScopeEvent {
         evidence     = @(ConvertTo-NormalizedArray $Evidence)
         data         = $Data
     }
+    if ($Type -eq 'task_retired' -and $outstandingReadyInputDriftTaskIds.Count -gt 0) {
+        $event.data.outstanding_ready_input_drift_task_ids = @($outstandingReadyInputDriftTaskIds | Sort-Object -Unique)
+    }
     $event.event_hash = Get-WorkScopeEventHash -Event $event
     $State.last_event_id = $event.event_id
     $State.last_event_hash = $event.event_hash
-    $candidateValidation = Test-WorkScopeState -State $State -ArtifactRoot $paths.Root
-    if (-not $candidateValidation.valid) {
+    $candidateValidation = Test-WorkScopeState -State $State -ArtifactRoot $paths.Root -ValidationContext $ValidationContext
+    $unrelatedCandidateErrors = @($candidateValidation.errors)
+    if ($Type -eq 'task_retired') {
+        foreach ($outstandingTaskId in @($outstandingReadyInputDriftTaskIds | Sort-Object -Unique)) {
+            $candidateTask = $State.active.tasks | Where-Object { $_.id -eq $outstandingTaskId } | Select-Object -First 1
+            if ($null -eq $candidateTask -or $candidateTask.status -ne 'ready') {
+                continue
+            }
+            $escapedTaskId = [regex]::Escape($outstandingTaskId)
+            $recoverableInputError = "^Task '$escapedTaskId' verification input '.+' (?:is missing|changed after declaration)\.$"
+            $unrelatedCandidateErrors = @($unrelatedCandidateErrors | Where-Object { $_ -notmatch $recoverableInputError })
+        }
+    }
+    if ((($Type -eq 'verification_executed' -and -not [string]::IsNullOrWhiteSpace([string]$Data.closed_artifact_drift_repair_task_id)) -or
+         ($Type -eq 'closed_evidence_repaired' -and -not [string]::IsNullOrWhiteSpace([string]$Data.task_id)) -or
+         ($Type -eq 'closed_evidence_repaired_batch' -and @($Data.task_replacements).Count -gt 0))) {
+        $repairTaskIds = if ($Type -eq 'closed_evidence_repaired_batch') {
+            @($Data.task_replacements | ForEach-Object { [string]$_.task_id })
+        } elseif ($Type -eq 'verification_executed') {
+            @($State.active.tasks | Where-Object {
+                $_.status -eq 'closed' -and
+                (Test-StructuredEvidence -Evidence $_.evidence -Root $paths.Root -RequireProvenance -Historical -RetirementArtifactDrift)
+            } | ForEach-Object { [string]$_.id })
+        } else { @([string]$(if ($Type -eq 'verification_executed') { $Data.closed_artifact_drift_repair_task_id } else { $Data.task_id })) }
+        $repairTasks = @($State.active.tasks | Where-Object { $repairTaskIds -contains [string]$_.id })
+        $repairable = (
+            $State.active.status -in @('active', 'closed') -and
+            @($repairTaskIds).Count -gt 0 -and
+            @($repairTasks).Count -eq @($repairTaskIds).Count -and
+            @($repairTasks | Where-Object {
+                $_.status -ne 'closed' -or
+                -not (Test-StructuredEvidence -Evidence $_.evidence -Root $paths.Root -RequireProvenance -Historical -RetirementArtifactDrift)
+            }).Count -eq 0 -and
+            ($State.active.status -eq 'active' -or (Test-StructuredEvidence -Evidence $State.active.evidence -Root $paths.Root -RequireProvenance -Historical -RetirementArtifactDrift))
+        )
+        if ($repairable) {
+            $escapedTaskIds = @($repairTaskIds | ForEach-Object { [regex]::Escape($_) })
+            $unrelatedCandidateErrors = @($unrelatedCandidateErrors | Where-Object {
+                $errorText = [string]$_
+                $matchesRepairTask = @($escapedTaskIds | Where-Object { $errorText -match "^Closed task '$_' has missing or invalid structured evidence\.$" }).Count -gt 0
+                $errorText -notmatch '^Closed scope cell has missing or invalid structured evidence\.$' -and -not $matchesRepairTask
+            })
+        }
+    }
+    if ($unrelatedCandidateErrors.Count -gt 0) {
         throw "Candidate state validation failed before commit: $($candidateValidation.errors -join '; ')"
     }
     $transactionPath = Join-Path $paths.WorkRoot 'transaction.json'
@@ -1110,6 +2102,12 @@ function Add-WorkScopeEvent {
     try {
         Write-WorkScopeState -Root $Root -State $State
         Add-Content -LiteralPath $paths.Events -Value ($event | ConvertTo-Json -Depth 20 -Compress) -Encoding utf8NoBOM
+        if ($null -ne $ValidationContext.Events) {
+            $ValidationContext.Events = @($ValidationContext.Events) + @($event)
+            if ($null -ne $ValidationContext.EventIndex) {
+                $ValidationContext.EventIndex[[string]$event.event_id] = $event
+            }
+        }
         if ($null -ne $FileCommit) {
             Move-Item -LiteralPath $FileCommit.temporary_path -Destination $FileCommit.final_path -Force
         }
@@ -1118,6 +2116,7 @@ function Add-WorkScopeEvent {
     catch {
         throw "State-event commit was interrupted. The recovery journal remains at '$transactionPath'. $($_.Exception.Message)"
     }
+    $event | Add-Member -NotePropertyName validation_counters -NotePropertyValue $ValidationContext.Counters -Force
     return $event
 }
 
@@ -1295,6 +2294,296 @@ function Get-DefaultSchemaPath {
     return (Join-Path $PSScriptRoot '..\assets\schema.json')
 }
 
+function Get-WorkScopeSchemaIdentity {
+    <# Name the schema a refusal was measured against. A vendored project schema can lag the
+       canonical one, and a message that omits which schema spoke is unactionable: the reader
+       cannot tell a genuine violation from a stale snapshot without this. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$SchemaFile)
+    if (-not (Test-Path -LiteralPath $SchemaFile -PathType Leaf)) {
+        return "schema='$SchemaFile' (missing)"
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($SchemaFile)
+    $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    $version = $null
+    try {
+        $parsed = [System.Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json -AsHashtable
+        if ($parsed -is [System.Collections.IDictionary] -and $parsed.Contains('$id')) { $version = [string]$parsed['$id'] }
+    }
+    catch { $version = $null }
+    $identity = "schema='$SchemaFile' sha256=$($hash.Substring(0, 16))"
+    if ($version) { $identity += " id='$version'" }
+    return $identity
+}
+
+function Resolve-WorkScopeSchemaNode {
+    param($Node, $RootSchema)
+    $guard = 0
+    while ($Node -is [System.Collections.IDictionary] -and $Node.Contains('$ref')) {
+        if (++$guard -gt 32) { break }
+        $ref = [string]$Node['$ref']
+        if (-not $ref.StartsWith('#')) { break }
+        $current = $RootSchema
+        foreach ($segment in ($ref.TrimStart('#').Trim('/') -split '/')) {
+            if ([string]::IsNullOrEmpty($segment)) { continue }
+            $segment = $segment.Replace('~1', '/').Replace('~0', '~')
+            if ($current -is [System.Collections.IDictionary] -and $current.Contains($segment)) { $current = $current[$segment] }
+            else { return $Node }
+        }
+        $Node = $current
+    }
+    return $Node
+}
+
+function Test-WorkScopeInstanceType {
+    param($Instance, [string]$Type)
+    switch ($Type) {
+        'object' { return ($Instance -is [System.Collections.IDictionary]) }
+        'array' { return ($Instance -is [System.Collections.IList] -and -not ($Instance -is [string])) }
+        # ConvertFrom-Json coerces ISO-8601 strings to DateTime on runtimes without -DateKind,
+        # which would make every timestamp read as a type violation it is not.
+        'string' { return ($Instance -is [string] -or $Instance -is [datetime] -or $Instance -is [datetimeoffset]) }
+        'integer' { return ($Instance -is [int] -or $Instance -is [long] -or $Instance -is [System.Int16]) }
+        'number' { return ($Instance -is [int] -or $Instance -is [long] -or $Instance -is [double] -or $Instance -is [decimal]) }
+        'boolean' { return ($Instance -is [bool]) }
+        'null' { return ($null -eq $Instance) }
+        default { return $true }
+    }
+}
+
+function Get-WorkScopeSchemaViolationList {
+    <# Walk a candidate against the schema and name the property that actually failed.
+       .NET `Test-Json` reports only the last failing branch it happened to evaluate, which for
+       this schema is the `last_event_hash` oneOf -- a correct 64-hex string that is never the
+       problem. Anyone debugging from that string chases the wrong field, so this pass exists to
+       name the real instance path and the keyword that rejected it. #>
+    param($Instance, $Schema, [string]$Path, $RootSchema, [System.Collections.Generic.List[object]]$Violations)
+    $Schema = Resolve-WorkScopeSchemaNode -Node $Schema -RootSchema $RootSchema
+    if (-not ($Schema -is [System.Collections.IDictionary])) { return }
+    $where = if ([string]::IsNullOrEmpty($Path)) { '<root>' } else { $Path }
+
+    if ($Schema.Contains('type')) {
+        $types = @($Schema['type'])
+        $matched = $false
+        foreach ($t in $types) { if (Test-WorkScopeInstanceType -Instance $Instance -Type ([string]$t)) { $matched = $true; break } }
+        if (-not $matched) {
+            $Violations.Add([pscustomobject]@{ path = $where; keyword = 'type'; detail = "expected type $($types -join '|')" })
+            return
+        }
+    }
+    if ($Schema.Contains('enum')) {
+        $allowed = @($Schema['enum'])
+        $hit = $false
+        foreach ($candidate in $allowed) {
+            if (($null -eq $candidate -and $null -eq $Instance) -or ($null -ne $candidate -and $candidate -is [string] -and $Instance -is [string] -and $candidate -ceq $Instance) -or ($null -ne $candidate -and -not ($candidate -is [string]) -and $candidate -eq $Instance)) { $hit = $true; break }
+        }
+        if (-not $hit) {
+            $Violations.Add([pscustomobject]@{ path = $where; keyword = 'enum'; detail = "value '$Instance' is not one of: $(($allowed | ForEach-Object { if ($null -eq $_) { 'null' } else { $_ } }) -join ', ')" })
+        }
+    }
+    if ($Instance -is [string]) {
+        if ($Schema.Contains('minLength') -and $Instance.Length -lt [int]$Schema['minLength']) {
+            $Violations.Add([pscustomobject]@{ path = $where; keyword = 'minLength'; detail = "string shorter than $([int]$Schema['minLength'])" })
+        }
+        if ($Schema.Contains('pattern') -and -not ([regex]::IsMatch($Instance, [string]$Schema['pattern']))) {
+            $Violations.Add([pscustomobject]@{ path = $where; keyword = 'pattern'; detail = "value '$Instance' does not match $($Schema['pattern'])" })
+        }
+    }
+    if (($Instance -is [int] -or $Instance -is [long] -or $Instance -is [double] -or $Instance -is [decimal]) -and $Schema.Contains('minimum') -and $Instance -lt $Schema['minimum']) {
+        $Violations.Add([pscustomobject]@{ path = $where; keyword = 'minimum'; detail = "value $Instance is below $($Schema['minimum'])" })
+    }
+    if ($Instance -is [System.Collections.IList] -and -not ($Instance -is [string])) {
+        if ($Schema.Contains('minItems') -and $Instance.Count -lt [int]$Schema['minItems']) {
+            $Violations.Add([pscustomobject]@{ path = $where; keyword = 'minItems'; detail = "array has $($Instance.Count) items, minimum $([int]$Schema['minItems'])" })
+        }
+        if ($Schema.Contains('uniqueItems') -and $Schema['uniqueItems'] -eq $true) {
+            $seen = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($element in $Instance) { if (-not $seen.Add(($element | ConvertTo-Json -Depth 12 -Compress))) { $Violations.Add([pscustomobject]@{ path = $where; keyword = 'uniqueItems'; detail = 'array contains duplicate entries' }); break } }
+        }
+        if ($Schema.Contains('items')) {
+            for ($i = 0; $i -lt $Instance.Count; $i++) {
+                Get-WorkScopeSchemaViolationList -Instance $Instance[$i] -Schema $Schema['items'] -Path "$Path/$i" -RootSchema $RootSchema -Violations $Violations
+            }
+        }
+    }
+    if ($Instance -is [System.Collections.IDictionary]) {
+        if ($Schema.Contains('required')) {
+            foreach ($required in @($Schema['required'])) {
+                if (-not $Instance.Contains([string]$required)) {
+                    $Violations.Add([pscustomobject]@{ path = $where; keyword = 'required'; detail = "required property '$required' is missing" })
+                }
+            }
+        }
+        $declared = if ($Schema.Contains('properties')) { $Schema['properties'] } else { $null }
+        if ($Schema.Contains('additionalProperties') -and $Schema['additionalProperties'] -eq $false) {
+            foreach ($key in @($Instance.Keys)) {
+                if ($null -eq $declared -or -not $declared.Contains([string]$key)) {
+                    $Violations.Add([pscustomobject]@{ path = "$Path/$key"; keyword = 'additionalProperties'; detail = "property '$key' is not declared by this schema and additionalProperties is false" })
+                }
+            }
+        }
+        if ($null -ne $declared) {
+            foreach ($key in @($declared.Keys)) {
+                if ($Instance.Contains([string]$key)) {
+                    Get-WorkScopeSchemaViolationList -Instance $Instance[$key] -Schema $declared[$key] -Path "$Path/$key" -RootSchema $RootSchema -Violations $Violations
+                }
+            }
+        }
+    }
+    foreach ($combiner in @('allOf')) {
+        if ($Schema.Contains($combiner)) {
+            foreach ($branch in @($Schema[$combiner])) {
+                Get-WorkScopeSchemaViolationList -Instance $Instance -Schema $branch -Path $Path -RootSchema $RootSchema -Violations $Violations
+            }
+        }
+    }
+    foreach ($combiner in @('oneOf', 'anyOf')) {
+        if (-not $Schema.Contains($combiner)) { continue }
+        $branchResults = @()
+        foreach ($branch in @($Schema[$combiner])) {
+            $branchViolations = [System.Collections.Generic.List[object]]::new()
+            Get-WorkScopeSchemaViolationList -Instance $Instance -Schema $branch -Path $Path -RootSchema $RootSchema -Violations $branchViolations
+            $branchResults += , $branchViolations
+        }
+        if (@($branchResults | Where-Object { $_.Count -eq 0 }).Count -gt 0) { continue }
+        # Every branch failed. Report the closest one rather than the last one evaluated.
+        $closest = $branchResults | Sort-Object { $_.Count } | Select-Object -First 1
+        foreach ($violation in $closest) { $Violations.Add($violation) }
+    }
+}
+
+function Format-WorkScopeSchemaFailure {
+    <# One refusal string that names the offending property, its path, and the schema that spoke. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$Summary,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$Json,
+        [Parameter(Mandatory)] [string]$SchemaFile
+    )
+    $identity = Get-WorkScopeSchemaIdentity -SchemaFile $SchemaFile
+    $violations = [System.Collections.Generic.List[object]]::new()
+    try {
+        $literalDates = (Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')
+        $instance = if ($literalDates) { $Json | ConvertFrom-Json -AsHashtable -Depth 40 -DateKind String } else { $Json | ConvertFrom-Json -AsHashtable -Depth 40 }
+        $schemaText = Get-Content -LiteralPath $SchemaFile -Raw
+        $schema = if ($literalDates) { $schemaText | ConvertFrom-Json -AsHashtable -Depth 40 -DateKind String } else { $schemaText | ConvertFrom-Json -AsHashtable -Depth 40 }
+        Get-WorkScopeSchemaViolationList -Instance $instance -Schema $schema -Path '' -RootSchema $schema -Violations $violations
+    }
+    catch {
+        return "$Summary Diagnostic pass could not run ($($_.Exception.Message)). [$identity]"
+    }
+    if ($violations.Count -eq 0) {
+        return "$Summary The diagnostic pass found no violation it can express, so the rejection comes from a schema construct it does not model. [$identity]"
+    }
+    $ordered = $violations | Sort-Object -Property @{ Expression = { ($_.path -split '/').Count }; Descending = $true }
+    $rendered = @($ordered | Select-Object -First 5 | ForEach-Object { "$($_.path) [$($_.keyword)]: $($_.detail)" })
+    $more = if ($violations.Count -gt $rendered.Count) { " (and $($violations.Count - $rendered.Count) more)" } else { '' }
+    return "$Summary Offending properties: $($rendered -join '; ')$more. [$identity]"
+}
+
+function Test-WorkScopeSchemaCurrency {
+    <# Report whether a project's vendored schema still matches canonical. Drift here is not
+       invalid state -- the file on disk validates fine against its own stale snapshot -- so it
+       is invisible until a write that uses a newer field is refused. This makes it reportable
+       before that happens. `Sync-WorkScopeSchema -Root <project>` is the refresh. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$Root)
+    $resolved = [System.IO.Path]::GetFullPath($Root)
+    $statePath = Join-Path $resolved '.agents/work/state.json'
+    $schemaPath = Join-Path $resolved '.agents/work/schema.json'
+    $canonicalPath = Get-DefaultSchemaPath
+    $canonicalHash = if (Test-Path -LiteralPath $canonicalPath -PathType Leaf) {
+        [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.IO.File]::ReadAllBytes($canonicalPath))).ToLowerInvariant()
+    }
+    else { $null }
+    $status = 'current'
+    $vendoredHash = $null
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { $status = 'not_enrolled' }
+    elseif (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf)) { $status = 'missing' }
+    else {
+        $vendoredHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.IO.File]::ReadAllBytes($schemaPath))).ToLowerInvariant()
+        if ($vendoredHash -ne $canonicalHash) { $status = 'stale' }
+    }
+    return [pscustomobject]@{
+        root = $resolved
+        status = $status
+        current = ($status -eq 'current')
+        vendored_schema = $schemaPath
+        vendored_sha256 = $vendoredHash
+        canonical_schema = $canonicalPath
+        canonical_sha256 = $canonicalHash
+        remedy = if ($status -eq 'stale' -or $status -eq 'missing') {
+            "pwsh -NoProfile -Command `"Import-Module '$(Join-Path $PSScriptRoot 'WorkScope.psm1')' -DisableNameChecking; Sync-WorkScopeSchema -Root '$resolved'`""
+        }
+        else { $null }
+    }
+}
+
+function Sync-WorkScopeSchema {
+    <# Refresh only the project-local validation schema from the canonical harness schema.
+       This is deliberately event-free: it changes no authoritative state, event history, or
+       rendered view, and it refuses a source schema that cannot validate the current state. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$Root)
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Sync-WorkScopeSchema @arguments }
+    }
+    $paths = Get-WorkScopePaths -Root $Root
+    $before = Test-WorkScopeState -Root $paths.Root
+    if (-not $before.valid) {
+        throw "Project state is invalid before schema refresh: $($before.errors -join '; ')"
+    }
+    $canonicalSchema = Get-DefaultSchemaPath
+    if (-not (Test-Path -LiteralPath $canonicalSchema -PathType Leaf)) {
+        throw "Canonical Work Scope schema is missing at '$canonicalSchema'."
+    }
+    $canonicalBytes = [System.IO.File]::ReadAllBytes($canonicalSchema)
+    try {
+        $canonicalText = [System.Text.Encoding]::UTF8.GetString($canonicalBytes)
+        if (-not ($canonicalText | Test-Json -ErrorAction Stop)) {
+            throw 'Canonical Work Scope schema is not valid JSON.'
+        }
+        $stateText = Get-Content -LiteralPath $paths.State -Raw
+        if (-not ($stateText | Test-Json -SchemaFile $canonicalSchema -ErrorAction SilentlyContinue)) {
+            throw (Format-WorkScopeSchemaFailure -Summary 'Canonical Work Scope schema is not backward-compatible with the current state.' -Json $stateText -SchemaFile $canonicalSchema)
+        }
+    }
+    catch {
+        throw "Cannot refresh Work Scope schema: $($_.Exception.Message)"
+    }
+    $currentBytes = if (Test-Path -LiteralPath $paths.Schema -PathType Leaf) {
+        [System.IO.File]::ReadAllBytes($paths.Schema)
+    }
+    else { $null }
+    if ($null -ne $currentBytes -and
+        ([Convert]::ToBase64String($currentBytes) -ceq [Convert]::ToBase64String($canonicalBytes))) {
+        return [pscustomobject]@{ updated = $false; schema = $paths.Schema; backup = $null }
+    }
+    $temporary = "$($paths.Schema).$([guid]::NewGuid().ToString('N')).tmp"
+    $backupRoot = Join-Path $paths.WorkRoot 'backups'
+    $backupTimestamp = (Get-UtcTimestamp).Replace(':', '-')
+    $backup = Join-Path $backupRoot ("schema.json.bak-$backupTimestamp.$([guid]::NewGuid().ToString('N'))")
+    try {
+        [System.IO.File]::WriteAllBytes($temporary, $canonicalBytes)
+        if ($null -ne $currentBytes) {
+            New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+            [System.IO.File]::WriteAllBytes($backup, $currentBytes)
+        }
+        Move-Item -LiteralPath $temporary -Destination $paths.Schema -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+    $after = Test-WorkScopeState -Root $paths.Root
+    if (-not $after.valid) {
+        throw "Project state is invalid after schema refresh: $($after.errors -join '; ')"
+    }
+    return [pscustomobject]@{ updated = $true; schema = $paths.Schema; backup = if (Test-Path -LiteralPath $backup -PathType Leaf) { $backup } else { $null } }
+}
+
 function Get-DefaultSelectionRulesPath {
     return (Join-Path $PSScriptRoot '..\assets\selection-rules.json')
 }
@@ -1412,10 +2701,28 @@ function Initialize-WorkScopeProject {
         last_event_hash = $null
     }
     Write-WorkScopeState -Root $Root -State $state
+    # Enrollment overwrites TASK.md, BACKBURNER.md and LOG.md with generated views. Line 1326
+    # guarantees no state file existed a moment ago, so anything sitting at those names is
+    # authored legacy content by definition -- and the first Sync-WorkScopeViews destroyed it,
+    # silently, with no copy anywhere. Migrate-TaskState.ps1 -ToWorkScope is the route that
+    # carries the content across, but nothing made it run first. Archive by default, per the
+    # shared contract: enrollment still proceeds, and the event names what was set aside.
+    $legacyArchived = @()
+    $legacyNames = @('TASK.md', 'BACKBURNER.md', 'LOG.md', 'PROJECT.md', 'TRACKS.md')
+    $legacyPresent = @($legacyNames | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf })
+    if ($legacyPresent.Count -gt 0) {
+        $archiveRoot = Join-Path $paths.WorkRoot ('legacy-task-state-' + (Get-UtcTimestamp).Replace(':', '-'))
+        New-Item -ItemType Directory -Path $archiveRoot -Force | Out-Null
+        foreach ($legacyName in $legacyPresent) {
+            Copy-Item -LiteralPath (Join-Path $Root $legacyName) -Destination (Join-Path $archiveRoot $legacyName) -Force
+            $legacyArchived += $legacyName
+        }
+    }
     Add-WorkScopeEvent -Root $Root -State $state -Type 'project_initialized' -Data @{
         owner_session = $OwnerSession
         frontier_mode = $FrontierMode
         breadth_boundary = $BreadthBoundary
+        legacy_task_state_archived = $legacyArchived
     } | Out-Null
     Sync-WorkScopeViews -Root $Root | Out-Null
     return $state
@@ -1428,8 +2735,20 @@ function Test-WorkScopeState {
         [Parameter(Mandatory, ParameterSetName = 'State')] [hashtable]$State,
         # Where this checkout actually lives. Callers in the State set know it; the stored
         # project.root does not, once the same repository is checked out on another machine.
-        [Parameter(ParameterSetName = 'State')] [string]$ArtifactRoot
+        [Parameter(ParameterSetName = 'State')] [string]$ArtifactRoot,
+        $ValidationContext
     )
+    # A commit intentionally writes state before it appends the matching event, with a
+    # recovery journal covering interruption. Readers must take that same lock: otherwise a
+    # validator can observe the valid intermediate S1/E0 pair and falsely report tail drift
+    # while a concurrent writer is still inside its atomic commit.
+    if ($PSCmdlet.ParameterSetName -eq 'Root' -and -not (Test-WorkScopeLockHeld -Root $Root)) {
+        $paths = Get-WorkScopePaths -Root $Root
+        if (Test-Path -LiteralPath $paths.State) {
+            $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+            return Invoke-WithWorkScopeLock -Root $Root -Action { Test-WorkScopeState @arguments }
+        }
+    }
     $schemaFailure = $null
     $resolvedArtifactRoot = $null
     if ($PSCmdlet.ParameterSetName -eq 'Root') {
@@ -1483,7 +2802,7 @@ function Test-WorkScopeState {
                 $schemaFailure = "JSON schema file is missing at '$($paths.Schema)'."
             }
             elseif (-not (Test-Json -LiteralPath $paths.State -SchemaFile $paths.Schema -ErrorAction SilentlyContinue)) {
-                $schemaFailure = 'JSON schema validation failed.'
+                $schemaFailure = Format-WorkScopeSchemaFailure -Summary 'JSON schema validation failed.' -Json (Get-Content -LiteralPath $paths.State -Raw) -SchemaFile $paths.Schema
             }
         }
         catch {
@@ -1505,7 +2824,7 @@ function Test-WorkScopeState {
             }
             $stateJson = $State | ConvertTo-Json -Depth 30
             if (-not ($stateJson | Test-Json -SchemaFile $schemaPath -ErrorAction SilentlyContinue)) {
-                $schemaFailure = 'JSON schema validation failed for candidate state.'
+                $schemaFailure = Format-WorkScopeSchemaFailure -Summary 'JSON schema validation failed for candidate state.' -Json $stateJson -SchemaFile $schemaPath
             }
         }
         catch {
@@ -1513,6 +2832,9 @@ function Test-WorkScopeState {
         }
     }
     $errors = [System.Collections.Generic.List[string]]::new()
+    if ($null -eq $ValidationContext -and -not [string]::IsNullOrWhiteSpace($resolvedArtifactRoot)) {
+        $ValidationContext = New-WorkScopeValidationContext -Root $resolvedArtifactRoot
+    }
     if ($schemaFailure) {
         $errors.Add($schemaFailure)
     }
@@ -1549,19 +2871,22 @@ function Test-WorkScopeState {
     elseif ($null -eq (Get-StateCapability -State $State -TrackId $State.active.track_id -CapabilityId $State.active.capability_id)) {
         $errors.Add("Active capability '$($State.active.capability_id)' does not exist.")
     }
-    if ($State.active.cell_id -ne "$($State.active.capability_id)@$($State.active.depth)") {
-        $errors.Add('Active cell_id does not match capability and depth.')
+    $baseCellId = "$($State.active.capability_id)@$($State.active.depth)"
+    $followupCellPattern = '^' + [regex]::Escape($baseCellId) + '\.followup\.[1-9][0-9]*$'
+    if ($State.active.cell_id -ne $baseCellId -and $State.active.cell_id -notmatch $followupCellPattern) {
+        $errors.Add('Active cell_id does not match capability, depth, or follow-up ordinal.')
     }
     if ($State.active.status -eq 'closed') {
         if (@(ConvertTo-NormalizedArray $State.active.tasks).Count -eq 0) {
             $errors.Add('Closed scope cell has no materialized task.')
         }
-        if (-not (Test-StructuredEvidence -Evidence $State.active.evidence -Root $resolvedArtifactRoot -RequireProvenance)) {
+        if (-not (Test-StructuredEvidence -Evidence $State.active.evidence -Root $resolvedArtifactRoot -RequireProvenance -Historical -ValidationContext $ValidationContext)) {
             $errors.Add('Closed scope cell has missing or invalid structured evidence.')
         }
         else {
             $expectedCellReceiptIds = @(
                 $State.active.tasks |
+                    Where-Object { $_.status -eq 'closed' } |
                     ForEach-Object { @($_.evidence) } |
                     ForEach-Object { $_.receipt_id } |
                     Sort-Object
@@ -1605,7 +2930,7 @@ function Test-WorkScopeState {
                     $check.executable_sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
                     $check.arguments_sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
                     $check.arguments_sha256 -ne (Get-WorkScopeStringArrayHash -Values @($check.arguments)) -or
-                    [int]$check.timeout_seconds -lt 1 -or [int]$check.timeout_seconds -gt 3600 -or
+                    [int]$check.timeout_seconds -lt 1 -or [int]$check.timeout_seconds -gt 14400 -or
                     [int64]$check.max_output_bytes -lt 64 -or [int64]$check.max_output_bytes -gt 10485760) {
                     $errors.Add("Task '$($task.id)' acceptance check '$($check.id)' is invalid.")
                 }
@@ -1617,19 +2942,43 @@ function Test-WorkScopeState {
                     $errors.Add($_.Exception.Message)
                 }
                 foreach ($artifact in @($check.artifacts)) {
-                    Resolve-WorkScopeArtifact -Root $resolvedArtifactRoot -Artifact ([string]$artifact) | Out-Null
+                    Resolve-WorkScopeCachedArtifact -Root $resolvedArtifactRoot -Artifact ([string]$artifact) -ValidationContext $ValidationContext | Out-Null
                 }
                 foreach ($inputSnapshot in @($check.verifier_inputs)) {
-                    $inputReference = Resolve-WorkScopeArtifact -Root $resolvedArtifactRoot -Artifact ([string]$inputSnapshot.reference)
+                    $inputReference = Resolve-WorkScopeCachedArtifact -Root $resolvedArtifactRoot -Artifact ([string]$inputSnapshot.reference) -ValidationContext $ValidationContext
+                    # A terminal task's check will never run again, so its binding to the current
+                    # working tree is dead weight -- but it was still enforced, and validation fails
+                    # closed, so editing or deleting a file an ABANDONED check named invalidated the
+                    # whole state and blocked every guarded mutation, including adding the
+                    # replacement task. Found on kelly-uniforms-business REC-002, where recovery was
+                    # the thing the lock prevented. The path is still resolved above, so a terminal
+                    # task cannot smuggle in a traversal reference; only the filesystem binding goes.
+                    #
+                    # `closed` was deliberately left enforcing on 2026-08-09, tracked as
+                    # closed-task-input-drift-blocks-state, on the reading that a closed task's proof
+                    # genuinely no longer covers an edited file. That reading is right about the
+                    # evidence and wrong about where to act on it, and this repository hit the
+                    # consequence on 2026-08-10: two ordinary edits to files a closed task's check had
+                    # named -- Run-ToolTests.ps1 and its policy manifest, edited to FIX a defect --
+                    # invalidated the entire state and blocked every guarded write, including the
+                    # retire that would have released the binding. Reconcile-WorkState had no repair
+                    # for it either way. That is a ratchet: every file ever named by any closed check
+                    # becomes permanently uneditable, and the failure lands on whoever edits it next
+                    # rather than on the task whose proof went stale.
+                    #
+                    # A receipt is a historical record of what was true when the check ran. It keeps
+                    # its recorded hash, so nothing is lost and the drift is still visible to anyone
+                    # reading the evidence; what stops is re-hashing live files against a past
+                    # receipt and calling today's tree a defect in yesterday's proof.
+                    if ([string]$task.status -eq 'retired' -or [string]$task.status -eq 'closed') { continue }
                     $inputPath = Join-Path $resolvedArtifactRoot $inputReference
                     if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
                         $errors.Add("Task '$($task.id)' verification input '$inputReference' is missing.")
                         continue
                     }
-                    $inputItem = Get-Item -LiteralPath $inputPath -Force
-                    $inputHash = (Get-FileHash -LiteralPath $inputPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                    if ($inputHash -ne $inputSnapshot.sha256 -or
-                        [int64]$inputItem.Length -ne [int64]$inputSnapshot.size_bytes) {
+                    $inputSnapshotNow = Get-WorkScopeFileSnapshot -Path $inputPath -ValidationContext $ValidationContext
+                    if ($inputSnapshotNow.sha256 -ne $inputSnapshot.sha256 -or
+                        [int64]$inputSnapshotNow.size_bytes -ne [int64]$inputSnapshot.size_bytes) {
                         $errors.Add("Task '$($task.id)' verification input '$inputReference' changed after declaration.")
                     }
                 }
@@ -1647,7 +2996,7 @@ function Test-WorkScopeState {
                             $errors.Add("Task '$($task.id)' PowerShell check has no -File script.")
                         }
                         else {
-                            $scriptReference = Resolve-WorkScopeArtifact -Root $resolvedArtifactRoot -Artifact $declaredArguments[$fileArgumentIndex + 1]
+                            $scriptReference = Resolve-WorkScopeCachedArtifact -Root $resolvedArtifactRoot -Artifact $declaredArguments[$fileArgumentIndex + 1] -ValidationContext $ValidationContext
                             if (@($check.verifier_inputs | Where-Object { $_.reference -eq $scriptReference }).Count -ne 1) {
                                 $errors.Add("Task '$($task.id)' PowerShell -File script '$scriptReference' is not hash-bound as a verifier input.")
                             }
@@ -1667,7 +3016,7 @@ function Test-WorkScopeState {
             $errors.Add("Task '$($task.id)' references missing dependencies: $($missingDependencies -join ', ').")
         }
         if ($task.status -eq 'closed') {
-            if (-not (Test-StructuredEvidence -Evidence $task.evidence -Root $resolvedArtifactRoot -RequireProvenance)) {
+            if (-not (Test-StructuredEvidence -Evidence $task.evidence -Root $resolvedArtifactRoot -RequireProvenance -Historical -ValidationContext $ValidationContext)) {
                 $errors.Add("Closed task '$($task.id)' has missing or invalid structured evidence.")
             }
             else {
@@ -1731,18 +3080,41 @@ function Test-WorkScopeState {
             }
         }
     }
-    $artifactOwners = [System.Collections.Generic.List[object]]::new()
+    # Same pairwise scan in the same order, with Test-WorkScopeArtifactOverlap's body
+    # inlined and its TrimEnd hoisted. The scan is quadratic in claimed artifacts and
+    # this repository claims 122 of them, so the 7,381 comparisons were 7,381
+    # PowerShell function invocations -- about 3 s of pure call overhead. Keeping the
+    # loops rather than sorting into prefix groups keeps the error order identical.
+    #
+    # The accumulated claims are four parallel typed lists rather than a list of
+    # pscustomobjects. Each comparison read three properties off a PSObject, and a
+    # PSObject property read goes through the adapter rather than being a field
+    # access, so the quadratic scan paid 22,143 adapter lookups. Indexing a
+    # List[string] is the same data in the same order with none of that.
+    $ownerSessionIds = [System.Collections.Generic.List[string]]::new()
+    $ownerArtifacts = [System.Collections.Generic.List[string]]::new()
+    $ownerNormalized = [System.Collections.Generic.List[string]]::new()
+    $ownerPrefixes = [System.Collections.Generic.List[string]]::new()
     foreach ($session in @($State.ownership.sessions)) {
+        $ownerSessionId = [string]$session.session_id
         foreach ($artifact in @($session.artifacts)) {
             try {
                 $normalizedArtifact = Resolve-WorkScopeArtifact -Root $resolvedArtifactRoot -Artifact $artifact
-                foreach ($claim in $artifactOwners) {
-                    if ($claim.session_id -ne $session.session_id -and
-                        (Test-WorkScopeArtifactOverlap -Left $claim.artifact -Right $normalizedArtifact)) {
-                        $errors.Add("Artifact ownership overlaps between '$($claim.artifact)' and '$normalizedArtifact'.")
+                $rightNormalized = $normalizedArtifact.TrimEnd('/')
+                $rightPrefix = $rightNormalized + '/'
+                for ($claimIndex = 0; $claimIndex -lt $ownerNormalized.Count; $claimIndex++) {
+                    if ($ownerSessionIds[$claimIndex] -eq $ownerSessionId) { continue }
+                    $leftNormalized = $ownerNormalized[$claimIndex]
+                    if ($leftNormalized.Equals($rightNormalized, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $leftNormalized.StartsWith($rightPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $rightNormalized.StartsWith($ownerPrefixes[$claimIndex], [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $errors.Add("Artifact ownership overlaps between '$($ownerArtifacts[$claimIndex])' and '$normalizedArtifact'.")
                     }
                 }
-                $artifactOwners.Add([pscustomobject]@{ session_id = $session.session_id; artifact = $normalizedArtifact })
+                $ownerSessionIds.Add($ownerSessionId)
+                $ownerArtifacts.Add($normalizedArtifact)
+                $ownerNormalized.Add($rightNormalized)
+                $ownerPrefixes.Add($rightPrefix)
             }
             catch {
                 $errors.Add($_.Exception.Message)
@@ -1756,8 +3128,52 @@ function Test-WorkScopeState {
         catch {
             $errors.Add($_.Exception.Message)
         }
-        if (-not (Test-StructuredEvidence -Evidence $item.evidence -Root $resolvedArtifactRoot)) {
+        if (-not (Test-StructuredEvidence -Evidence $item.evidence -Root $resolvedArtifactRoot -ValidationContext $ValidationContext)) {
             $errors.Add("Backburner item '$($item.id)' has invalid structured evidence.")
+        }
+        $semanticKey = Get-WorkScopeOptionalMember -Item $item -Name 'semantic_key' | Select-Object -First 1
+        if ($null -ne $semanticKey) {
+            try {
+                Assert-SafeWorkScopeId -Id ([string]$semanticKey) -Label "Backburner item '$($item.id)' semantic identity"
+            }
+            catch {
+                $errors.Add($_.Exception.Message)
+            }
+        }
+        $supersededBy = Get-WorkScopeOptionalMember -Item $item -Name 'superseded_by' | Select-Object -First 1
+        if ($null -ne $supersededBy) {
+            $target = @($State.backburner | Where-Object { $_.id -eq [string]$supersededBy }) | Select-Object -First 1
+            if ([string]$item.id -eq [string]$supersededBy) {
+                $errors.Add("Backburner item '$($item.id)' cannot supersede itself.")
+            }
+            elseif ($null -eq $target) {
+                $errors.Add("Backburner item '$($item.id)' supersedes missing target '$supersededBy'.")
+            }
+            else {
+                $targetSemanticKey = Get-WorkScopeOptionalMember -Item $target -Name 'semantic_key' | Select-Object -First 1
+                if ([string]::IsNullOrWhiteSpace([string]$semanticKey) -or
+                    [string]::IsNullOrWhiteSpace([string]$targetSemanticKey) -or
+                    [string]$semanticKey -ne [string]$targetSemanticKey) {
+                    $errors.Add("Backburner item '$($item.id)' has a semantic identity mismatch with supersession target '$supersededBy'.")
+                }
+            }
+            if ([string]$item.status -ne 'rejected') {
+                $errors.Add("Backburner item '$($item.id)' has superseded_by but is not rejected.")
+            }
+        }
+    }
+    foreach ($item in @($State.backburner | Where-Object { $null -ne (Get-WorkScopeOptionalMember -Item $_ -Name 'superseded_by' | Select-Object -First 1) })) {
+        $seen = @{}
+        $cursor = $item
+        while ($null -ne $cursor) {
+            if ($seen.ContainsKey([string]$cursor.id)) {
+                $errors.Add("Backburner supersession graph contains a cycle at '$($cursor.id)'.")
+                break
+            }
+            $seen[[string]$cursor.id] = $true
+            $nextId = Get-WorkScopeOptionalMember -Item $cursor -Name 'superseded_by' | Select-Object -First 1
+            if ($null -eq $nextId) { break }
+            $cursor = @($State.backburner | Where-Object { $_.id -eq [string]$nextId }) | Select-Object -First 1
         }
     }
     if ($PSCmdlet.ParameterSetName -eq 'Root') {
@@ -1767,7 +3183,7 @@ function Test-WorkScopeState {
         }
         $events = @()
         try {
-            $events = @(Get-Content -LiteralPath $paths.Events | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+            $events = @(Get-WorkScopeValidationEvents -Root $paths.Root -Context $ValidationContext)
         }
         catch {
             $errors.Add("Event log contains invalid JSON: $($_.Exception.Message)")
@@ -1784,9 +3200,12 @@ function Test-WorkScopeState {
         if (@($eventIds | Sort-Object -Unique).Count -ne $eventIds.Count) {
             $errors.Add('Event ids must be unique.')
         }
+        if ($events.Count -ge $script:WorkScopeNativeCanonicalizerThreshold) {
+            $null = Enable-WorkScopeNativeCanonicalizer
+        }
         for ($eventIndex = 0; $eventIndex -lt $events.Count; $eventIndex++) {
             $event = $events[$eventIndex]
-            if ($event.event_hash -ne (Get-WorkScopeEventHash -Event $event)) {
+            if ($event.event_hash -ne (Get-WorkScopeEventHash -Event $event -Expected ([string]$event.event_hash) -ValidationContext $ValidationContext)) {
                 $errors.Add("Event payload hash is invalid for '$($event.event_id)'.")
             }
             if ($eventIndex -eq 0) {
@@ -1824,10 +3243,36 @@ function Test-WorkScopeState {
                 $_.capability_id -eq $State.active.capability_id -and
                 $_.cell_id -eq $State.active.cell_id
             })
+            $repairEvents = @($events | Where-Object {
+                (($_.type -eq 'closed_evidence_repaired' -and $_.data.task_id -eq $task.id) -or
+                 ($_.type -eq 'closed_evidence_repaired_batch' -and @($_.data.task_replacements | ForEach-Object task_id) -contains $task.id)) -and
+                $_.track_id -eq $State.active.track_id -and
+                $_.capability_id -eq $State.active.capability_id -and
+                $_.cell_id -eq $State.active.cell_id
+            })
+            $authoritativeTaskEvent = @($taskEvents + $repairEvents | Sort-Object state_revision | Select-Object -Last 1)
+            $authoritativeTaskEvidence = if ($authoritativeTaskEvent.Count -gt 0 -and $authoritativeTaskEvent[-1].type -eq 'closed_evidence_repaired_batch') {
+                $batchEvent = $authoritativeTaskEvent[-1]
+                $replacementRows = @($batchEvent.data.task_replacements | Where-Object task_id -eq $task.id)
+                $filteredEvidence = @($batchEvent.evidence | Where-Object task_id -eq $task.id)
+                if ($replacementRows.Count -ne 1 -or
+                    ((@($replacementRows[0].replacement_receipt_ids) | ConvertTo-Json -Compress) -ne (@($filteredEvidence | ForEach-Object receipt_id) | ConvertTo-Json -Compress))) {
+                    $errors.Add("Closed task '$($task.id)' batch repair mapping is invalid.")
+                }
+                $filteredEvidence
+            } elseif ($authoritativeTaskEvent.Count -gt 0 -and $authoritativeTaskEvent[-1].type -eq 'closed_evidence_repaired') {
+                $repairEvent = $authoritativeTaskEvent[-1]
+                $filteredEvidence = @($repairEvent.evidence | Where-Object task_id -eq $task.id)
+                if ((@($repairEvent.data.replacement_receipt_ids) | ConvertTo-Json -Compress) -ne
+                    (@($filteredEvidence | ForEach-Object receipt_id) | ConvertTo-Json -Compress)) {
+                    $errors.Add("Closed task '$($task.id)' repair mapping is invalid.")
+                }
+                $filteredEvidence
+            } elseif ($authoritativeTaskEvent.Count -gt 0) { @($authoritativeTaskEvent[-1].evidence) } else { @() }
             if ($taskEvents.Count -eq 0) {
                 $errors.Add("Closed task '$($task.id)' has no matching completion event.")
             }
-            elseif (($taskEvents[-1].evidence | ConvertTo-Json -Depth 10 -Compress) -ne ($task.evidence | ConvertTo-Json -Depth 10 -Compress)) {
+            elseif (($authoritativeTaskEvidence | ConvertTo-Json -Depth 10 -Compress) -ne ($task.evidence | ConvertTo-Json -Depth 10 -Compress)) {
                 $errors.Add("Closed task '$($task.id)' evidence disagrees with its completion event.")
             }
         }
@@ -1838,10 +3283,17 @@ function Test-WorkScopeState {
                 $_.capability_id -eq $State.active.capability_id -and
                 $_.cell_id -eq $State.active.cell_id
             })
+            $repairEvents = @($events | Where-Object {
+                $_.type -in @('closed_evidence_repaired', 'closed_evidence_repaired_batch') -and
+                $_.track_id -eq $State.active.track_id -and
+                $_.capability_id -eq $State.active.capability_id -and
+                $_.cell_id -eq $State.active.cell_id
+            })
+            $authoritativeCellEvent = @($closureEvents + $repairEvents | Sort-Object state_revision | Select-Object -Last 1)
             if ($closureEvents.Count -eq 0) {
                 $errors.Add("Closed scope cell '$($State.active.cell_id)' has no matching closure event.")
             }
-            elseif (($closureEvents[-1].evidence | ConvertTo-Json -Depth 10 -Compress) -ne ($State.active.evidence | ConvertTo-Json -Depth 10 -Compress)) {
+            elseif (($authoritativeCellEvent[-1].evidence | ConvertTo-Json -Depth 10 -Compress) -ne ($State.active.evidence | ConvertTo-Json -Depth 10 -Compress)) {
                 $errors.Add("Closed scope cell '$($State.active.cell_id)' evidence disagrees with its closure event.")
             }
         }
@@ -1866,8 +3318,18 @@ function Add-WorkScopeTask {
         [string[]]$CheckArguments = @(),
         [string[]]$CheckInputs = @(),
         [string[]]$CheckArtifacts = @(),
-        [ValidateRange(1, 3600)] [int]$CheckTimeoutSeconds = 300,
-        [ValidateRange(64, 10485760)] [int64]$CheckMaxOutputBytes = 1048576
+        # 4 hours. The old ceiling was 1 hour, which put this harness's own full test gate --
+        # Run-ToolTests.ps1 with the slow suites, measured at about 65 minutes -- outside what any
+        # project could declare as an acceptance check. A bound that excludes the most thorough
+        # verifier available is a bound that quietly pushes tasks onto weaker proof, which is the
+        # opposite of what acceptance checks are for. It stays bounded because a check with no
+        # ceiling is a way for a run to hang forever holding a task open.
+        [ValidateRange(1, 14400)] [int]$CheckTimeoutSeconds = 300,
+        [ValidateRange(64, 10485760)] [int64]$CheckMaxOutputBytes = 1048576,
+        # Which declared specs this task answers. Attribution is explicit rather than inferred, so
+        # "every task closed, therefore the request is met" cannot happen by accident -- a spec is
+        # met only by a task that said it was answering it.
+        [string[]]$Satisfies = @()
     )
     if (-not (Test-WorkScopeLockHeld -Root $Root)) {
         $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
@@ -1898,17 +3360,18 @@ function Add-WorkScopeTask {
             ForEach-Object { Resolve-WorkScopeArtifact -Root $Root -Artifact $_ } |
             Sort-Object -Unique
     )
+    $validationContext = New-WorkScopeValidationContext -Root $Root
     $checkInputSnapshots = @(
         foreach ($inputReference in $checkInputsNormalized) {
             $inputPath = Join-Path $Root $inputReference
             if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
                 throw "Verification input '$inputReference' must exist when the task is declared."
             }
-            $inputItem = Get-Item -LiteralPath $inputPath -Force
+            $inputSnapshot = Get-WorkScopeFileSnapshot -Path $inputPath -ValidationContext $validationContext
             [ordered]@{
                 reference = $inputReference
-                sha256 = (Get-FileHash -LiteralPath $inputPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                size_bytes = [int64]$inputItem.Length
+                sha256 = $inputSnapshot.sha256
+                size_bytes = [int64]$inputSnapshot.size_bytes
             }
         }
     )
@@ -1969,9 +3432,21 @@ function Add-WorkScopeTask {
         evidence = @()
         closed_at = $null
     }
+    $satisfiesNormalized = @(ConvertTo-NormalizedArray $Satisfies)
+    if ($satisfiesNormalized.Count -gt 0) {
+        # A task may only claim specs that exist, or the attribution proves nothing.
+        $declaredSpecIds = @(@(Get-WorkScopeOptionalMember -Item $state -Name 'specs') | ForEach-Object { $_.id })
+        $unknown = @($satisfiesNormalized | Where-Object { $declaredSpecIds -notcontains $_ })
+        if ($unknown.Count -gt 0) {
+            throw "Task '$TaskId' claims undeclared spec(s): $($unknown -join ', ')."
+        }
+        $task['satisfies'] = $satisfiesNormalized
+        Set-WorkScopeSchemaVersionForSpecLayer -State $state
+    }
     $state.active.tasks = @($state.active.tasks) + @($task)
-    Add-WorkScopeEvent -Root $Root -State $state -Type 'task_added' -Data @{ task_id = $TaskId } | Out-Null
-    Sync-WorkScopeViews -Root $Root | Out-Null
+    $event = Add-WorkScopeEvent -Root $Root -State $state -Type 'task_added' -Data @{ task_id = $TaskId } -ValidationContext $validationContext
+    Sync-WorkScopeViews -Root $Root -ValidationContext $validationContext | Out-Null
+    $task | Add-Member -NotePropertyName validation_counters -NotePropertyValue $event.validation_counters -Force
     return $task
 }
 
@@ -1979,7 +3454,14 @@ function Resolve-TaskStatuses {
     param([Parameter(Mandatory)] [hashtable]$State)
     $closed = @($State.active.tasks | Where-Object { $_.status -eq 'closed' } | ForEach-Object { $_.id })
     foreach ($task in @($State.active.tasks)) {
-        if ($task.status -eq 'closed') {
+        # `retired` belongs here as much as `closed` does, and its absence made retirement
+        # temporary. This resolver runs twice inside task completion on state that is then
+        # persisted, so a retired task was rewritten to `ready` the next time any other task
+        # closed -- taking its abandoned check's working-tree binding with it, which is the
+        # thing retirement exists to release. Both are terminal: neither can become ready
+        # again, and dependency satisfaction still requires `closed`, so a task depending on a
+        # retired one stays blocked rather than being quietly let through.
+        if ($task.status -eq 'closed' -or $task.status -eq 'retired') {
             continue
         }
         $unmet = @($task.dependencies | Where-Object { $closed -notcontains $_ })
@@ -1998,6 +3480,7 @@ function Set-WorkScopeTaskRetired {
     param(
         [Parameter(Mandatory)] [string]$Root,
         [Parameter(Mandatory)] [string]$TaskId,
+        [string[]]$RelatedTaskIds = @(),
         [Parameter(Mandatory)] [string]$Reason
     )
     if (-not (Test-WorkScopeLockHeld -Root $Root)) {
@@ -2007,26 +3490,56 @@ function Set-WorkScopeTaskRetired {
     if ([string]::IsNullOrWhiteSpace($Reason)) {
         throw 'Retiring a task requires a reason.'
     }
+    $validationContext = New-WorkScopeValidationContext -Root $Root
     $state = Read-WorkScopeState -Root $Root
     if ($state.active.status -ne 'active') {
         throw 'Tasks can only be retired inside an active scope cell.'
     }
-    $task = $state.active.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
-    if ($null -eq $task) {
-        throw "Task '$TaskId' does not exist in the active scope cell."
+    $taskIds = @(
+        @($TaskId) + @(ConvertTo-NormalizedArray $RelatedTaskIds) |
+            Sort-Object -Unique
+    )
+    $tasks = @()
+    $closedArtifactDriftTaskIds = @()
+    foreach ($retirementTaskId in $taskIds) {
+        $task = $state.active.tasks | Where-Object { $_.id -eq $retirementTaskId } | Select-Object -First 1
+        if ($null -eq $task) {
+            throw "Task '$retirementTaskId' does not exist in the active scope cell."
+        }
+        if ($task.status -eq 'closed') {
+            $strictEvidenceIsValid = Test-StructuredEvidence -Evidence $task.evidence -Root $Root -RequireProvenance -Historical
+            $receiptAndProvenanceAreValid = Test-StructuredEvidence -Evidence $task.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift
+            if ($strictEvidenceIsValid -or -not $receiptAndProvenanceAreValid) {
+                throw "Task '$retirementTaskId' already closed on evidence and cannot be retired."
+            }
+            $closedArtifactDriftTaskIds += $retirementTaskId
+        }
+        $tasks += $task
     }
-    if ($task.status -eq 'closed') {
-        throw "Task '$TaskId' already closed on evidence and cannot be retired."
+    $retiredAt = Get-UtcTimestamp
+    foreach ($task in $tasks) {
+        $task.status = 'retired'
+        $task['retired_reason'] = $Reason
+        $task['retired_at'] = $retiredAt
     }
-    $task.status = 'retired'
-    $task['retired_reason'] = $Reason
-    $task['retired_at'] = Get-UtcTimestamp
-    Add-WorkScopeEvent -Root $Root -State $state -Type 'task_retired' -Data @{
+    $event = Add-WorkScopeEvent -Root $Root -State $state -Type 'task_retired' -Data @{
         task_id = $TaskId
+        related_task_ids = @($taskIds | Where-Object { $_ -ne $TaskId })
         reason = $Reason
-    } | Out-Null
-    Sync-WorkScopeViews -Root $Root | Out-Null
-    return [pscustomobject]@{ task_id = $TaskId; status = 'retired'; reason = $Reason }
+        closed_artifact_drift = ($closedArtifactDriftTaskIds.Count -gt 0)
+        closed_artifact_drift_task_ids = @($closedArtifactDriftTaskIds)
+    } -ValidationContext $validationContext
+    Sync-WorkScopeViews -Root $Root -ValidationContext $validationContext | Out-Null
+    $results = @($taskIds | ForEach-Object {
+        [pscustomobject]@{
+            task_id = $_
+            status = 'retired'
+            reason = $Reason
+            validation_counters = $event.validation_counters
+        }
+    })
+    if ($results.Count -eq 1) { return $results[0] }
+    return $results
 }
 
 function Complete-WorkScopeTask {
@@ -2040,6 +3553,7 @@ function Complete-WorkScopeTask {
         $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
         return Invoke-WithWorkScopeLock -Root $Root -Action { Complete-WorkScopeTask @arguments }
     }
+    $validationContext = New-WorkScopeValidationContext -Root $Root
     $evidenceReceipts = @(Resolve-WorkScopeClosureEvidence -Evidence $Evidence -Root $Root -Context 'Task completion')
     $state = Read-WorkScopeState -Root $Root
     $task = $state.active.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
@@ -2055,9 +3569,272 @@ function Complete-WorkScopeTask {
     $task.evidence = $evidenceReceipts
     $task.closed_at = Get-UtcTimestamp
     Resolve-TaskStatuses -State $state
-    Add-WorkScopeEvent -Root $Root -State $state -Type 'task_completed' -Evidence $evidenceReceipts -Data @{ task_id = $TaskId } | Out-Null
+    # Closing a task is the only thing that can meet a spec, so the derivation runs here and is
+    # persisted with the same event rather than recomputed by every later reader.
+    Resolve-WorkScopeSpecStatus -State $state
+    $event = Add-WorkScopeEvent -Root $Root -State $state -Type 'task_completed' -Evidence $evidenceReceipts -Data @{ task_id = $TaskId } -ValidationContext $validationContext
+    Sync-WorkScopeViews -Root $Root -ValidationContext $validationContext | Out-Null
+    $task | Add-Member -NotePropertyName validation_counters -NotePropertyValue $event.validation_counters -Force
+    return $task
+}
+
+function Repair-WorkScopeClosedEvidence {
+    <# Replace the active proof for one already-closed task only after a fresh execution
+       receipt exists.  The prior receipt remains immutable on disk and is retained in
+       historical_evidence; the repair event binds both ids and the reason. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$TaskId,
+        [Parameter(Mandatory)] [string[]]$Evidence,
+        [Parameter(Mandatory)] [string]$Reason
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Repair-WorkScopeClosedEvidence @arguments }
+    }
+    if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Closed-evidence repair requires a reason.' }
+    $state = Read-WorkScopeState -Root $Root
+    if ($state.active.status -notin @('active', 'closed')) { throw 'Closed-evidence repair requires an active or closed scope cell.' }
+    $task = $state.active.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
+    if ($null -eq $task -or $task.status -ne 'closed') { throw "Closed-evidence repair requires closed task '$TaskId'." }
+    if (-not (Test-StructuredEvidence -Evidence $task.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift) -or
+        ($state.active.status -eq 'closed' -and -not (Test-StructuredEvidence -Evidence $state.active.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift))) {
+        throw "Closed task '$TaskId' is not recoverable result-artifact drift."
+    }
+    $receipts = @(Resolve-WorkScopeClosureEvidence -Evidence $Evidence -Root $Root -Context 'Closed-evidence repair')
+    Assert-WorkScopeTaskReceiptCoverage -Task $task -Receipts $receipts -State $state -Context 'Closed-evidence repair'
+    $eventsPath = Join-Path ([System.IO.Path]::GetFullPath($Root)) '.agents\work\events.jsonl'
+    $events = @(Get-Content -LiteralPath $eventsPath | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+    $verifierInputDriftReplacements = [System.Collections.Generic.List[object]]::new()
+    foreach ($receipt in $receipts) {
+        $recordPath = Join-Path $Root ([string]$receipt.reference)
+        $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json -AsHashtable
+        if (-not $record.Contains('declared_verifier_inputs') -or $null -eq $record.declared_verifier_inputs) {
+            continue
+        }
+        $acceptanceChecks = @($task.acceptance_checks | Where-Object { $_.id -eq $receipt.check_id })
+        $executionEvents = @($events | Where-Object {
+            $_.type -eq 'verification_executed' -and $_.event_id -eq $receipt.provenance_event_id -and
+            $_.data.closed_verifier_input_drift_repair_task_id -eq $TaskId
+        })
+        $declaredJson = ConvertTo-WorkScopeCanonicalValue -Value @($record.declared_verifier_inputs) | ConvertTo-Json -Depth 30 -Compress
+        $taskDeclaredJson = if ($acceptanceChecks.Count -eq 1) {
+            ConvertTo-WorkScopeCanonicalValue -Value @($acceptanceChecks[0].verifier_inputs) | ConvertTo-Json -Depth 30 -Compress
+        } else { $null }
+        $currentJson = ConvertTo-WorkScopeCanonicalValue -Value @($record.verifier_inputs) | ConvertTo-Json -Depth 30 -Compress
+        if ($acceptanceChecks.Count -ne 1 -or $executionEvents.Count -ne 1 -or
+            [string]::IsNullOrWhiteSpace($declaredJson) -or $declaredJson -cne $taskDeclaredJson -or
+            $declaredJson -ceq $currentJson -or
+            ((ConvertTo-WorkScopeCanonicalValue -Value @($executionEvents[0].data.declared_verifier_inputs) | ConvertTo-Json -Depth 30 -Compress) -cne $declaredJson) -or
+            ((ConvertTo-WorkScopeCanonicalValue -Value @($executionEvents[0].data.current_verifier_inputs) | ConvertTo-Json -Depth 30 -Compress) -cne $currentJson)) {
+            throw "Closed-evidence repair receipt '$($receipt.receipt_id)' has invalid verifier-input drift provenance."
+        }
+        $verifierInputDriftReplacements.Add([ordered]@{
+            receipt_id = $receipt.receipt_id
+            check_id = $receipt.check_id
+            declared_verifier_inputs = @($record.declared_verifier_inputs)
+            current_verifier_inputs = @($record.verifier_inputs)
+        })
+    }
+    $oldTaskEvidence = @($task.evidence)
+    $task.evidence = $receipts
+    if ($state.active.status -eq 'closed') {
+        # A cell closes on the union of all closed task receipts. Replacing one
+        # task's proof must retain the unaffected tasks' evidence and make the
+        # repair event authoritative for that same aggregate.
+        $state.active.evidence = @(
+            $state.active.tasks |
+                Where-Object { $_.status -eq 'closed' } |
+                ForEach-Object { @($_.evidence) }
+        )
+    }
+    $eventEvidence = if ($state.active.status -eq 'closed') { @($state.active.evidence) } else { $receipts }
+    # State keeps normalized receipt objects, so the superseding event must bind the same
+    # objects. Recording the caller's `receipt=<id>` declarations here left the repair event
+    # structurally valid but permanently disagreed with the repaired task and cell evidence.
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'closed_evidence_repaired' -Evidence $eventEvidence -Data @{
+        task_id = $TaskId
+        reason = $Reason
+        replaced_receipt_ids = @($oldTaskEvidence | ForEach-Object { $_.receipt_id })
+        replacement_receipt_ids = @($receipts | ForEach-Object { $_.receipt_id })
+        active_cell_status = $state.active.status
+        verifier_input_drift_replacements = @($verifierInputDriftReplacements)
+    } | Out-Null
     Sync-WorkScopeViews -Root $Root | Out-Null
     return $task
+}
+
+function Repair-WorkScopeClosedEvidenceBatch {
+    <# Atomically replace the active receipts for every drifted closed task in a closed cell.
+       All replacement receipts are resolved and checked before state is changed; one
+       superseding event becomes authoritative for every task and for the cell. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [hashtable]$TaskReceiptMap,
+        [Parameter(Mandatory)] [string]$Reason
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Repair-WorkScopeClosedEvidenceBatch @arguments }
+    }
+    if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Batch closed-evidence repair requires a reason.' }
+    if ($TaskReceiptMap.Count -eq 0) { throw 'Batch closed-evidence repair requires a task-to-receipt map.' }
+    $state = Read-WorkScopeState -Root $Root
+    if ($state.active.status -ne 'closed') { throw 'Batch closed-evidence repair requires a closed scope cell.' }
+    $closedTasks = @($state.active.tasks | Where-Object status -eq 'closed')
+    $requestedIds = @($TaskReceiptMap.Keys | ForEach-Object { [string]$_ } | Sort-Object)
+    $preRepairValidation = Test-WorkScopeState -Root $Root
+    $strictlyDriftedTaskIds = @($closedTasks | Where-Object {
+        -not (Test-StructuredEvidence -Evidence $_.evidence -Root $Root -RequireProvenance -Historical)
+    } | ForEach-Object { [string]$_.id } | Sort-Object)
+    if (($requestedIds -join "`n") -cne ($strictlyDriftedTaskIds -join "`n")) {
+        throw 'Batch closed-evidence repair requires exactly one replacement entry for every closed task with strict result-artifact drift.'
+    }
+    $expectedRepairErrors = @('Closed scope cell has missing or invalid structured evidence.') + @($strictlyDriftedTaskIds | ForEach-Object { "Closed task '$_' has missing or invalid structured evidence." })
+    if ($preRepairValidation.valid -or
+        @($preRepairValidation.errors | Where-Object { $_ -notin $expectedRepairErrors }).Count -gt 0) {
+        throw 'Batch closed-evidence repair requires strict result-artifact drift and no unrelated state error.'
+    }
+    if (-not (Test-StructuredEvidence -Evidence $state.active.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift) -or
+        @($closedTasks | Where-Object {
+            -not (Test-StructuredEvidence -Evidence $_.evidence -Root $Root -RequireProvenance -Historical -RetirementArtifactDrift)
+        }).Count -gt 0) {
+        throw 'Batch closed-evidence repair accepts only recoverable result-artifact drift with intact receipt provenance.'
+    }
+
+    $resolvedByTask = [ordered]@{}
+    $taskReplacements = [System.Collections.Generic.List[object]]::new()
+    $allReceipts = [System.Collections.Generic.List[object]]::new()
+    foreach ($task in $closedTasks) {
+        $taskId = [string]$task.id
+        if ($requestedIds -notcontains $taskId) {
+            foreach ($receipt in @($task.evidence)) { $allReceipts.Add($receipt) }
+            continue
+        }
+        $declarations = @($TaskReceiptMap[$taskId])
+        if ($declarations.Count -eq 0) { throw "Batch closed-evidence repair has no replacement receipt for task '$taskId'." }
+        $receipts = @(Resolve-WorkScopeClosureEvidence -Evidence $declarations -Root $Root -Context "Batch closed-evidence repair for '$taskId'")
+        Assert-WorkScopeTaskReceiptCoverage -Task $task -Receipts $receipts -State $state -Context "Batch closed-evidence repair for '$taskId'"
+        foreach ($receipt in $receipts) {
+            $record = Get-Content -LiteralPath (Join-Path $Root ([string]$receipt.reference)) -Raw | ConvertFrom-Json -AsHashtable
+            if ($record.Contains('declared_verifier_inputs') -and $null -ne $record.declared_verifier_inputs) {
+                throw "Batch closed-evidence repair receipt '$($receipt.receipt_id)' contains verifier-input drift; use the explicit single-task repair path."
+            }
+        }
+        $resolvedByTask[$taskId] = $receipts
+        foreach ($receipt in $receipts) { $allReceipts.Add($receipt) }
+        $taskReplacements.Add([ordered]@{
+            task_id = $taskId
+            replaced_receipt_ids = @($task.evidence | ForEach-Object receipt_id)
+            replacement_receipt_ids = @($receipts | ForEach-Object receipt_id)
+        })
+    }
+
+    foreach ($task in $closedTasks) {
+        $taskId = [string]$task.id
+        if ($requestedIds -contains $taskId) {
+            $task.evidence = @($resolvedByTask[$taskId])
+        }
+    }
+    $state.active.evidence = @($allReceipts)
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'closed_evidence_repaired_batch' -Evidence @($allReceipts) -Data @{
+        reason = $Reason
+        task_replacements = @($taskReplacements)
+        active_cell_status = $state.active.status
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return [pscustomobject]@{
+        cell_id = $state.active.cell_id
+        repaired_tasks = @($requestedIds)
+        receipt_ids = @($allReceipts | ForEach-Object receipt_id)
+    }
+}
+
+function Get-WorkScopeSessionModes {
+    param([Parameter(Mandatory)] [string]$Root, $ValidationContext)
+
+    $paths = Get-WorkScopePaths -Root $Root
+    if (-not (Test-Path -LiteralPath $paths.Events)) {
+        return @()
+    }
+    $latest = @{}
+    foreach ($event in @(Get-WorkScopeValidationEvents -Root $paths.Root -Context $ValidationContext)) {
+        if ($event.type -ne 'session_mode_changed') {
+            continue
+        }
+        $sessionId = [string]$event.data.session_id
+        if ([string]::IsNullOrWhiteSpace($sessionId)) {
+            continue
+        }
+        $latest[$sessionId] = $event
+    }
+    return @($latest.Values | Sort-Object { [string]$_.data.session_id })
+}
+
+function Set-WorkScopeSessionMode {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$SessionId,
+        [Parameter(Mandatory)] [ValidateSet('conductor')] [string]$Mode,
+        [Parameter(Mandatory)] [ValidateSet('on', 'off')] [string]$Status,
+        [Parameter(Mandatory)] [string]$Goal
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Set-WorkScopeSessionMode @arguments }
+    }
+    if ([string]::IsNullOrWhiteSpace($SessionId)) {
+        throw 'SessionId must not be blank.'
+    }
+    if ([string]::IsNullOrWhiteSpace($Goal)) {
+        throw 'Goal must not be blank.'
+    }
+    $state = Read-WorkScopeState -Root $Root
+    $eventData = [ordered]@{
+        session_id = $SessionId.Trim()
+        mode = $Mode
+        status = $Status
+        date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+        goal = $Goal.Trim()
+    }
+    $event = Add-WorkScopeEvent -Root $Root -State $state -Type 'session_mode_changed' -Data $eventData
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $event
+}
+
+function Get-WorkScopeActiveSelection {
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [System.Collections.IDictionary]$State
+    )
+    $eventsPath = Join-Path ([System.IO.Path]::GetFullPath($Root)) '.agents\work\events.jsonl'
+    $selection = @(
+        Get-Content -LiteralPath $eventsPath |
+            Where-Object { $_ } |
+            ForEach-Object { $_ | ConvertFrom-Json -AsHashtable } |
+            Where-Object {
+                $_.type -eq 'frontier_item_selected' -and
+                $_.track_id -eq $State.active.track_id -and
+                $_.capability_id -eq $State.active.capability_id -and
+                $_.cell_id -eq $State.active.cell_id
+            }
+    ) | Select-Object -Last 1
+    if ($null -eq $selection -or [string]::IsNullOrWhiteSpace([string]$selection.data.backburner_id)) {
+        return $null
+    }
+    $selected = $State.backburner |
+        Where-Object { $_.id -eq [string]$selection.data.backburner_id } |
+        Select-Object -First 1
+    if ($null -eq $selected) {
+        throw "Active selection '$($selection.data.backburner_id)' is missing from the discovery queue."
+    }
+    if ($selected.status -ne 'selected') {
+        throw "Active selection '$($selected.id)' is '$($selected.status)' instead of selected."
+    }
+    return $selected
 }
 
 function Close-WorkScopeCell {
@@ -2071,6 +3848,14 @@ function Close-WorkScopeCell {
         return Invoke-WithWorkScopeLock -Root $Root -Action { Close-WorkScopeCell @arguments }
     }
     $state = Read-WorkScopeState -Root $Root
+    # Every sibling transition reads the cell's status and this one did not, so a blocked cell
+    # closed on its already-recorded task receipts: the capability reached `status: closed` while
+    # still naming an unresolved blocker, and Test-WorkScopeState called that valid. Blocked is a
+    # parking state, not a terminal one; the guarded route out of it is Resume-WorkScopeBlockedCell,
+    # which now covers every blocked cell so that this refusal cannot wedge one.
+    if ([string]$state.active.status -ne 'active') {
+        throw "Only an active scope cell can be closed; '$($state.active.cell_id)' is '$($state.active.status)'."
+    }
     if (@($state.active.tasks).Count -eq 0) {
         throw 'Cannot close a scope cell without at least one materialized task.'
     }
@@ -2082,9 +3867,9 @@ function Close-WorkScopeCell {
     if ($closedTasks.Count -eq 0) {
         throw 'Cannot close a scope cell whose every task was retired; at least one task must close on executed evidence.'
     }
-    $evidenceReceipts = @(Resolve-WorkScopeClosureEvidence -Evidence $Evidence -Root $Root -Context 'Scope-cell completion')
+    $evidenceReceipts = @(Resolve-WorkScopeClosureEvidence -Evidence $Evidence -Root $Root -Context 'Scope-cell completion' -Historical)
     $expectedReceiptIds = @(
-        $state.active.tasks |
+        $closedTasks |
             ForEach-Object { @($_.evidence) } |
             ForEach-Object { $_.receipt_id } |
             Sort-Object
@@ -2093,21 +3878,207 @@ function Close-WorkScopeCell {
     if (($expectedReceiptIds | ConvertTo-Json -Compress) -ne ($providedReceiptIds | ConvertTo-Json -Compress)) {
         throw 'Scope-cell completion evidence must be exactly the receipts already bound to its closed tasks.'
     }
-    # A retired task carries no receipt by definition; its reason is on the event
-    # chain instead. Demanding coverage for one would make retirement useless.
+    # Retirement preserves any historical task receipt and its event provenance, but that
+    # receipt no longer proves the final artifact state. Active cell-completion evidence is
+    # therefore exactly the still-closed tasks; demanding retired coverage would make an
+    # authorized supersession impossible to finish.
     foreach ($task in $closedTasks) {
         $taskReceipts = @($evidenceReceipts | Where-Object { $_.task_id -eq $task.id })
         Assert-WorkScopeTaskReceiptCoverage -Task $task -Receipts $taskReceipts -State $state -Context 'Scope-cell completion'
     }
+    $selectedDiscovery = Get-WorkScopeActiveSelection -Root $Root -State $state
+    $capability = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
+    $targetDepthRecovery = $null
+    if ((ConvertTo-DepthIndex $state.active.depth) -gt (ConvertTo-DepthIndex $capability.target_depth) -and
+        $null -ne $selectedDiscovery -and
+        $selectedDiscovery.suggested_track -eq $state.active.track_id -and
+        $selectedDiscovery.suggested_capability -eq $state.active.capability_id -and
+        $selectedDiscovery.entry_depth -eq $state.active.depth -and
+        ($null -eq $capability.current_depth -or
+            (ConvertTo-DepthIndex $capability.current_depth) -le (ConvertTo-DepthIndex $state.active.depth))) {
+        # A selector event ties this active cell to the discovery that opened it. Only that
+        # provenance permits recovery: an arbitrary persisted current/target mismatch stays
+        # invalid rather than being silently normalized at closure.
+        $targetDepthRecovery = [ordered]@{
+            previous_target_depth = $capability.target_depth
+            recovered_target_depth = $state.active.depth
+            recovered_capability_id = $capability.id
+        }
+        $capability.target_depth = $state.active.depth
+    }
+    if ($null -ne $selectedDiscovery) {
+        $selectedDiscovery.status = 'closed'
+        $selectedDiscovery.blockers = @()
+    }
     $state.active.status = 'closed'
     $state.active.closed_at = Get-UtcTimestamp
     $state.active.evidence = $evidenceReceipts
-    $capability = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
     $capability.current_depth = $state.active.depth
     if ((ConvertTo-DepthIndex $state.active.depth) -ge (ConvertTo-DepthIndex $capability.target_depth)) {
         $capability.status = 'closed'
     }
-    Add-WorkScopeEvent -Root $Root -State $state -Type 'scope_cell_closed' -Evidence $evidenceReceipts | Out-Null
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'scope_cell_closed' -Evidence $evidenceReceipts -Data @{
+        backburner_ids = if ($null -eq $selectedDiscovery) { @() } else { @($selectedDiscovery.id) }
+        target_depth_recovery = ($null -ne $targetDepthRecovery)
+        previous_target_depth = if ($null -eq $targetDepthRecovery) { $null } else { $targetDepthRecovery.previous_target_depth }
+        recovered_target_depth = if ($null -eq $targetDepthRecovery) { $null } else { $targetDepthRecovery.recovered_target_depth }
+        recovered_capability_id = if ($null -eq $targetDepthRecovery) { $null } else { $targetDepthRecovery.recovered_capability_id }
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $state.active
+}
+
+function Start-WorkScopeFollowup {
+    <#
+       A closure is historical evidence, so reopening its cell in place would make the old
+       task/evidence snapshot ambiguous.  A follow-up instead opens a distinct cell at the same
+       track, capability, and depth, with the exact closure event that authorized it recorded in
+       both state and the append-only event chain.  This deliberately bypasses neither discovery
+       selection nor the frontier: it is only for a newly confirmed, narrow continuation of the
+       just-closed capability.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$TrackId,
+        [Parameter(Mandatory)] [string]$CapabilityId,
+        [Parameter(Mandatory)] [string]$PriorCellId,
+        [Parameter(Mandatory)] [string]$PriorClosureEventId,
+        [Parameter(Mandatory)] [string]$Reason,
+        [switch]$Confirmed
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Start-WorkScopeFollowup @arguments }
+    }
+    if (-not $Confirmed) { throw 'Starting a post-closure follow-up requires -Confirmed.' }
+    if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Starting a post-closure follow-up requires a reason.' }
+    Assert-SafeWorkScopeId -Id $TrackId -Label 'Follow-up track id'
+    Assert-SafeWorkScopeId -Id $CapabilityId -Label 'Follow-up capability id'
+
+    $state = Read-WorkScopeState -Root $Root
+    if ([string]$state.active.status -ne 'closed') {
+        throw "Only a closed scope cell can start a post-closure follow-up; '$($state.active.cell_id)' is '$($state.active.status)'."
+    }
+    if ([string]$state.active.track_id -ne $TrackId -or [string]$state.active.capability_id -ne $CapabilityId) {
+        throw 'A post-closure follow-up must use the same track and capability as the closed cell; use the frontier for another capability.'
+    }
+    if ([string]$state.active.cell_id -ne $PriorCellId) {
+        throw "Follow-up prior cell '$PriorCellId' does not match the closed cell '$($state.active.cell_id)'."
+    }
+    if (@($state.backburner | Where-Object { $_.status -eq 'selected' }).Count -gt 0) {
+        throw 'A post-closure follow-up cannot start while a discovery remains selected.'
+    }
+
+    $events = @(
+        Get-Content -LiteralPath (Get-WorkScopePaths -Root $Root).Events |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { $_ | ConvertFrom-Json -AsHashtable }
+    )
+    $closure = @($events | Where-Object {
+        [string]$_.event_id -eq $PriorClosureEventId -and
+        [string]$_.type -eq 'scope_cell_closed' -and
+        [string]$_.track_id -eq $TrackId -and
+        [string]$_.capability_id -eq $CapabilityId -and
+        [string]$_.cell_id -eq $PriorCellId
+    })
+    if ($closure.Count -ne 1) {
+        throw "Follow-up closure event '$PriorClosureEventId' is not the exact closure provenance for '$PriorCellId'."
+    }
+    $stateReceiptIds = @($state.active.evidence | ForEach-Object { [string]$_.receipt_id } | Sort-Object)
+    $closureReceiptIds = @($closure[0].evidence | ForEach-Object { [string]$_.receipt_id } | Sort-Object)
+    if (($stateReceiptIds | ConvertTo-Json -Compress) -ne ($closureReceiptIds | ConvertTo-Json -Compress)) {
+        throw "Follow-up closure event '$PriorClosureEventId' does not preserve the closed cell receipts."
+    }
+
+    $capability = Get-StateCapability -State $state -TrackId $TrackId -CapabilityId $CapabilityId
+    if ($null -eq $capability -or [string]$capability.status -ne 'closed') {
+        throw "Follow-up capability '$CapabilityId' is not closed."
+    }
+    # Cell identity is scoped by capability and depth, rather than by the closure
+    # that started a follow-up. A follow-up can itself close and need a further
+    # refresh, so numbering from only its immediate prior closure would reuse
+    # `.followup.1` and leave the capability unable to continue.
+    $followupCellPrefix = "$CapabilityId@$($state.active.depth).followup."
+    $followupCellPattern = '^' + [regex]::Escape($followupCellPrefix) + '(?<ordinal>[1-9][0-9]*)$'
+    $existingFollowupOrdinals = @(
+        foreach ($event in $events) {
+            $match = [regex]::Match([string]$event.cell_id, $followupCellPattern)
+            if ($match.Success) {
+                [int64]$match.Groups['ordinal'].Value
+            }
+        }
+    )
+    $followupOrdinal = 1
+    if ($existingFollowupOrdinals.Count -gt 0) {
+        $followupOrdinal = ([int64](($existingFollowupOrdinals | Measure-Object -Maximum).Maximum)) + 1
+    }
+    $followupCellId = "$CapabilityId@$($state.active.depth).followup.$followupOrdinal"
+    if (@($events | Where-Object { [string]$_.cell_id -eq $followupCellId }).Count -gt 0) {
+        throw "Follow-up cell identity '$followupCellId' already exists in history."
+    }
+
+    $state.active = New-ActiveCell -TrackId $TrackId -CapabilityId $CapabilityId -CapabilityName $capability.name `
+        -Depth $state.active.depth -CellId $followupCellId -Goal "Follow up on ${PriorCellId}: $($Reason.Trim())"
+    $capability.status = 'active'
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'scope_cell_followup_started' -Data @{
+        prior_cell_id = $PriorCellId
+        prior_closure_event_id = $PriorClosureEventId
+        prior_track_id = $TrackId
+        prior_capability_id = $CapabilityId
+        prior_receipt_ids = $closureReceiptIds
+        reason = $Reason.Trim()
+        confirmed = $true
+        followup_ordinal = $followupOrdinal
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $state.active
+}
+
+function Block-WorkScopeCell {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$Reason,
+        [string[]]$Blockers = @()
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Block-WorkScopeCell @arguments }
+    }
+    $normalizedBlockers = @(
+        ConvertTo-NormalizedArray $Blockers |
+            ForEach-Object { [string]$_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { $_.Trim() } |
+            Sort-Object -Unique
+    )
+    if ([string]::IsNullOrWhiteSpace($Reason) -or $normalizedBlockers.Count -eq 0) {
+        throw 'Blocking a scope cell requires a reason and at least one named blocker.'
+    }
+    $state = Read-WorkScopeState -Root $Root
+    if ($state.active.status -ne 'active') {
+        throw "Only an active scope cell can be blocked; '$($state.active.cell_id)' is '$($state.active.status)'."
+    }
+    $openTasks = @($state.active.tasks | Where-Object { $_.status -notin @('closed', 'retired') })
+    if ($openTasks.Count -gt 0) {
+        throw "Cannot block scope cell while an open task remains: $($openTasks.id -join ', ')."
+    }
+
+    $capability = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
+    $capability.status = 'blocked'
+    $capability.blockers = $normalizedBlockers
+    $selectedDiscovery = Get-WorkScopeActiveSelection -Root $Root -State $state
+    if ($null -ne $selectedDiscovery) {
+        $selectedDiscovery.status = 'blocked'
+        $selectedDiscovery.blockers = $normalizedBlockers
+    }
+    $state.active.status = 'blocked'
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'scope_cell_blocked' -Data @{
+        reason = $Reason.Trim()
+        blockers = $normalizedBlockers
+        backburner_ids = if ($null -eq $selectedDiscovery) { @() } else { @($selectedDiscovery.id) }
+    } | Out-Null
     Sync-WorkScopeViews -Root $Root | Out-Null
     return $state.active
 }
@@ -2119,6 +4090,7 @@ function Set-WorkScopeOwnership {
         [Parameter(Mandatory)] [string]$SessionId,
         [Parameter(Mandatory)] [string[]]$Artifacts
     )
+    $Artifacts = Expand-WorkScopePackedArgument $Artifacts
     if (-not (Test-WorkScopeLockHeld -Root $Root)) {
         $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
         return Invoke-WithWorkScopeLock -Root $Root -Action { Set-WorkScopeOwnership @arguments }
@@ -2207,6 +4179,25 @@ function Move-WorkScopeOwnership {
     return [pscustomobject]@{ artifact = $normalized; from_session = $FromSession; to_session = $ToSession }
 }
 
+# The project's root INTENT.md is the one artifact the guard must not scope to a cell, because
+# the contract defines it as the thing that outlives every cell: "a statement that would still
+# govern after this project's current work ends is an intent clarification and goes to that
+# project's INTENT.md". Scoping it to a cell inverted that. Once the active cell closed -- the
+# ordinary state between two units, and the permanent state of a finished project -- every
+# modify of INTENT.md returned cell_not_active, and citing no capability instead returned
+# boundary_change, so the only sanctioned way to record a new binding intent was closed from
+# both sides. Reproduced on a fixture 2026-08-08 with every capability closed: exit 2 either way.
+# A finished project could never record another ruling.
+#
+# Deliberately exactly one path, matched at the project root only. A nested INTENT.md belongs to
+# something else and is ordinary work product. Everything the exemption does not touch still
+# applies: ownership collisions, artifacts outside the project, deletion, publication and
+# credential access are all unchanged, so this widens what a cell may be, not what a session may do.
+function Test-WorkScopeProjectIntentArtifact([string]$Normalized) {
+    if ([string]::IsNullOrWhiteSpace($Normalized)) { return $false }
+    return ($Normalized.Replace('\', '/') -ceq 'INTENT.md')
+}
+
 function Invoke-WorkScopeGuard {
     [CmdletBinding()]
     param(
@@ -2263,7 +4254,14 @@ function Invoke-WorkScopeGuard {
     if ($artifactOutsideProject) {
         $reasons.Add('artifact_outside_project')
     }
-    if ($ProjectId -ne $state.project.id -or $null -eq $targetTrack -or $null -eq $targetCapability) {
+    $projectIntentWrite = (-not $artifactOutsideProject) -and (Test-WorkScopeProjectIntentArtifact $normalized)
+    if ($projectIntentWrite -and $ProjectId -eq $state.project.id) {
+        # Project intent is not in a track, so there is no capability that would be the right one
+        # to cite for it. Requiring one is what made "cite none" fail as boundary_change while
+        # "cite the closed cell" failed as cell_not_active. Leaving the project is still a
+        # boundary change, which is why this only holds inside it.
+    }
+    elseif ($ProjectId -ne $state.project.id -or $null -eq $targetTrack -or $null -eq $targetCapability) {
         $reasons.Add('boundary_change')
     }
     else {
@@ -2290,15 +4288,21 @@ function Invoke-WorkScopeGuard {
                     if ($session.session_id -ne $SessionId) {
                         $reasons.Add('ownership_collision')
                     }
-                    if (($session.ContainsKey('track_id') -and $session.track_id -ne $TrackId) -or
-                        ($session.ContainsKey('capability_id') -and $session.capability_id -ne $CapabilityId)) {
-                        $reasons.Add('artifact_scope_mismatch')
+                    # Not for project intent: the guard just declined to require a capability for
+                    # it, so comparing the owner's against the caller's would refuse on a value it
+                    # has already called meaningless. The collision check above still stands --
+                    # two sessions writing INTENT.md at once is a real conflict.
+                    if (-not $projectIntentWrite) {
+                        if (($session.ContainsKey('track_id') -and $session.track_id -ne $TrackId) -or
+                            ($session.ContainsKey('capability_id') -and $session.capability_id -ne $CapabilityId)) {
+                            $reasons.Add('artifact_scope_mismatch')
+                        }
                     }
                 }
             }
         }
     }
-    if ($state.active.status -ne 'active' -and $ActionKind -in @('modify', 'create')) {
+    if ($state.active.status -ne 'active' -and $ActionKind -in @('modify', 'create') -and -not $projectIntentWrite) {
         $reasons.Add('cell_not_active')
     }
     return [pscustomobject]@{
@@ -2420,6 +4424,151 @@ function Set-WorkScopeFrontier {
     return $state.frontier
 }
 
+function Set-WorkScopeIntent {
+    <#
+        Records why the project exists, in prose, at project level.
+
+        `definition_of_done` already occupied this slot and could not do the job: every project
+        initialized with "All active-cell tasks are closed with evidence." and "Generated views
+        reconcile with canonical state." That is circular -- it asserts the bookkeeping is complete,
+        not that the project is right -- and because it reads as satisfied, it is worse than an
+        empty field. Intent is separate and is never auto-seeded, so an absent intent is visibly
+        absent.
+
+        Intent is prose on purpose. The testable half lives in specs, which are graded; splitting
+        them keeps the graded half from filling up with narrative.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$Intent
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Set-WorkScopeIntent @arguments }
+    }
+    $state = Read-WorkScopeState -Root $Root
+    $before = Get-WorkScopeOptionalMember -Item $state.project -Name 'intent' | Select-Object -First 1
+    Set-WorkScopeMember -Item $state.project -Name 'intent' -Value $Intent
+    Set-WorkScopeSchemaVersionForSpecLayer -State $state
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'project_intent_set' -Data @{
+        before = $before
+        after = $Intent
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $state.project
+}
+
+function Set-WorkScopeSchemaVersionForSpecLayer {
+    <# The intent/spec layer is additive, so a project that never adopts it stays at 1.0.0 and
+       keeps validating. Only a state that actually gains intent or a spec moves to 1.1.0. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $State)
+    if ($State.schema_version -eq '1.0.0') {
+        $State.schema_version = '1.1.0'
+    }
+}
+
+function Add-WorkScopeSpec {
+    <#
+        Adds one testable statement of what must be true.
+
+        There is deliberately no separate "requirement" concept. A requirement is a testable
+        statement of what must be true; a specification is the detail of how it behaves. Kept as two
+        artifacts they are the same sentence written at two altitudes, and the copies drift. One
+        graded artifact, one altitude.
+
+        Status is `active` on creation and is DERIVED thereafter -- see Resolve-WorkScopeSpecStatus.
+        Nothing hand-sets a spec to `met`, because a spec you can mark done without evidence is a
+        checkbox, and the whole point is to grade closure against the request.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$SpecId,
+        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$Statement,
+        [string]$Notes,
+        [ValidateSet('draft', 'active')] [string]$Status = 'active'
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Add-WorkScopeSpec @arguments }
+    }
+    $state = Read-WorkScopeState -Root $Root
+    $specs = @(Get-WorkScopeOptionalMember -Item $state -Name 'specs')
+    if (@($specs | Where-Object { $_.id -eq $SpecId }).Count -gt 0) {
+        throw "Spec '$SpecId' already exists. Amend it or retire it; ids are stable."
+    }
+    $spec = [ordered]@{
+        id = $SpecId
+        statement = $Statement
+        status = $Status
+        created_at = Get-UtcTimestamp
+        met_at = $null
+        satisfied_by = @()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Notes)) { $spec['notes'] = $Notes }
+    $specs = @($specs) + @([pscustomobject]$spec)
+    Set-WorkScopeMember -Item $state -Name 'specs' -Value $specs
+    Set-WorkScopeSchemaVersionForSpecLayer -State $state
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'spec_added' -Data @{
+        spec_id = $SpecId
+        statement = $Statement
+        status = $Status
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return [pscustomobject]$spec
+}
+
+function Resolve-WorkScopeSpecStatus {
+    <#
+        Derives spec status from evidence, in place, on a state object.
+
+        A spec becomes `met` when at least one CLOSED task that names it in `satisfies` carries
+        evidence. Attribution is explicit rather than inferred: a task must say which spec it
+        answers, so "everything closed, therefore the request is met" cannot happen by accident.
+
+        Derivation runs on read, so a spec cannot be stale relative to the tasks under it, and a
+        task retired after the fact takes its spec back to `active` rather than leaving a met spec
+        with no surviving evidence.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $State)
+
+    $specs = @(Get-WorkScopeOptionalMember -Item $State -Name 'specs')
+    if ($specs.Count -eq 0) { return }
+
+    $closedTasks = @($State.active.tasks | Where-Object { $_.status -eq 'closed' -and @($_.evidence).Count -gt 0 })
+
+    foreach ($spec in $specs) {
+        if ($spec.status -eq 'retired' -or $spec.status -eq 'draft') { continue }
+        $satisfying = @($closedTasks | Where-Object {
+            @(Get-WorkScopeOptionalMember -Item $_ -Name 'satisfies') -contains $spec.id
+        })
+        if ($satisfying.Count -gt 0) {
+            if ($spec.status -ne 'met') {
+                Set-WorkScopeMember -Item $spec -Name 'status' -Value 'met'
+                Set-WorkScopeMember -Item $spec -Name 'met_at' -Value (Get-UtcTimestamp)
+            }
+            Set-WorkScopeMember -Item $spec -Name 'satisfied_by' -Value @($satisfying | ForEach-Object { $_.id })
+        }
+        elseif ($spec.status -eq 'met') {
+            # The evidence that met it is gone -- a retired task, a reopened cell. Say so rather
+            # than leaving a met spec standing on nothing.
+            Set-WorkScopeMember -Item $spec -Name 'status' -Value 'active'
+            Set-WorkScopeMember -Item $spec -Name 'met_at' -Value $null
+            Set-WorkScopeMember -Item $spec -Name 'satisfied_by' -Value @()
+        }
+    }
+}
+
+function Get-WorkScopeUnmetSpec {
+    <# The active specs with no satisfying evidence, in declaration order. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $State)
+    return @(@(Get-WorkScopeOptionalMember -Item $State -Name 'specs') | Where-Object { $_.status -eq 'active' })
+}
+
 function Add-WorkScopeDiscovery {
     [CmdletBinding()]
     param(
@@ -2436,6 +4585,8 @@ function Add-WorkScopeDiscovery {
         [string[]]$Conflicts = @(),
         [Parameter(Mandatory)] [ValidateSet('low', 'medium', 'high')] [string]$Value,
         [Parameter(Mandatory)] [ValidateSet('low', 'medium', 'high')] [string]$Risk,
+        [ValidateSet('actionable', 'waiting', 'human', 'time', 'archive', 'system', 'future')] [string]$ObligationClass = 'actionable',
+        [string]$SemanticKey,
         [Parameter(Mandatory)] [string[]]$Evidence
     )
     if (-not (Test-WorkScopeLockHeld -Root $Root)) {
@@ -2445,6 +4596,9 @@ function Add-WorkScopeDiscovery {
     Assert-SafeWorkScopeId -Id $Id -Label 'Backburner id'
     Assert-SafeWorkScopeId -Id $SuggestedTrack -Label 'Suggested track id'
     Assert-SafeWorkScopeId -Id $SuggestedCapability -Label 'Suggested capability id'
+    if ($PSBoundParameters.ContainsKey('SemanticKey')) {
+        Assert-SafeWorkScopeId -Id $SemanticKey -Label 'Discovery semantic identity key'
+    }
     $evidenceReceipts = @(ConvertTo-WorkScopeEvidenceReceipts -Evidence $Evidence -Root $Root -Context 'Discovery capture')
     $state = Read-WorkScopeState -Root $Root
     if (@($state.backburner | Where-Object { $_.id -eq $Id }).Count -gt 0) {
@@ -2466,15 +4620,98 @@ function Add-WorkScopeDiscovery {
         conflicts = @(ConvertTo-NormalizedArray $Conflicts)
         value = $Value
         risk = $Risk
+        obligation_class = $ObligationClass
         evidence = $evidenceReceipts
         status = if ($dependencyList.Count -gt 0 -or $blockerList.Count -gt 0 -or @(ConvertTo-NormalizedArray $Conflicts).Count -gt 0) { 'blocked' } else { 'ready' }
         captured_at = Get-UtcTimestamp
     }
+    if ($PSBoundParameters.ContainsKey('SemanticKey')) {
+        $item.semantic_key = $SemanticKey
+    }
     $state.backburner = @($state.backburner) + @($item)
     $state.active.discoveries = @($state.active.discoveries) + @($Id)
+
+    # A project-local schema is a compatibility snapshot, so it can lag the canonical
+    # discovery shape. Validate the complete prospective state against the canonical
+    # contract first, then refresh the project snapshot. An invalid capture therefore
+    # remains free of state, event, schema, and backup side effects.
+    $canonicalSchema = Get-DefaultSchemaPath
+    $candidateJson = $state | ConvertTo-Json -Depth 30
+    if (-not ($candidateJson | Test-Json -SchemaFile $canonicalSchema -ErrorAction SilentlyContinue)) {
+        throw (Format-WorkScopeSchemaFailure -Summary 'Candidate state validation failed before schema refresh: JSON schema validation failed against the canonical Work Scope schema.' -Json $candidateJson -SchemaFile $canonicalSchema)
+    }
+    Sync-WorkScopeSchema -Root $Root | Out-Null
     Add-WorkScopeEvent -Root $Root -State $state -Type 'discovery_captured' -Evidence $evidenceReceipts -Data @{ backburner_id = $Id } | Out-Null
     Sync-WorkScopeViews -Root $Root | Out-Null
     return $item
+}
+
+function Supersede-WorkScopeDiscovery {
+    <# Preserve a stale discovery as history while linking it to the one explicit replacement.
+       The caller supplies the semantic key at capture; this action proves the two records are
+       the same finding instead of guessing from titles. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$Id,
+        [Parameter(Mandatory)] [string]$TargetId,
+        [Parameter(Mandatory)] [string]$Reason,
+        [Parameter(Mandatory)] [string[]]$Evidence
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Supersede-WorkScopeDiscovery @arguments }
+    }
+    Assert-SafeWorkScopeId -Id $Id -Label 'Superseded backburner id'
+    Assert-SafeWorkScopeId -Id $TargetId -Label 'Supersession target backburner id'
+    if ([string]::IsNullOrWhiteSpace($Reason)) {
+        throw 'Discovery supersession requires a reason.'
+    }
+    if (@($Evidence).Count -eq 0) {
+        throw 'Discovery supersession requires evidence.'
+    }
+    if ($Id -eq $TargetId) {
+        throw "Backburner item '$Id' cannot supersede itself."
+    }
+    $evidenceReceipts = @(ConvertTo-WorkScopeEvidenceReceipts -Evidence $Evidence -Root $Root -Context 'Discovery supersession')
+    $state = Read-WorkScopeState -Root $Root
+    $source = @($state.backburner | Where-Object { $_.id -eq $Id }) | Select-Object -First 1
+    $target = @($state.backburner | Where-Object { $_.id -eq $TargetId }) | Select-Object -First 1
+    if ($null -eq $source) {
+        throw "Backburner item '$Id' does not exist."
+    }
+    if ($null -eq $target) {
+        throw "Supersession target backburner item '$TargetId' does not exist."
+    }
+    if ([string]$source.status -eq 'selected') {
+        throw "Backburner item '$Id' is selected into active work; close its scope cell instead of superseding the discovery."
+    }
+    if ([string]$source.status -in @('closed', 'rejected')) {
+        throw "Backburner item '$Id' is already terminal and cannot be superseded."
+    }
+    $sourceKey = Get-WorkScopeOptionalMember -Item $source -Name 'semantic_key' | Select-Object -First 1
+    $targetKey = Get-WorkScopeOptionalMember -Item $target -Name 'semantic_key' | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace([string]$sourceKey) -or
+        [string]::IsNullOrWhiteSpace([string]$targetKey) -or
+        [string]$sourceKey -ne [string]$targetKey) {
+        throw "Backburner item '$Id' has a semantic identity mismatch with supersession target '$TargetId'."
+    }
+    if ($null -ne (Get-WorkScopeOptionalMember -Item $target -Name 'superseded_by' | Select-Object -First 1)) {
+        throw "Supersession target backburner item '$TargetId' is itself superseded; name its current replacement instead."
+    }
+    $previousStatus = [string]$source.status
+    $source.status = 'rejected'
+    $source.superseded_by = $TargetId
+    $source.evidence = @($source.evidence) + $evidenceReceipts
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'discovery_superseded' -Evidence $evidenceReceipts -Data @{
+        backburner_id = $Id
+        superseded_by = $TargetId
+        previous_status = $previousStatus
+        semantic_key = $sourceKey
+        reason = $Reason
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $source
 }
 
 function Set-WorkScopeDiscoveryStatus {
@@ -2489,7 +4726,14 @@ function Set-WorkScopeDiscoveryStatus {
         [Parameter(Mandatory)] [string]$Id,
         [Parameter(Mandatory)] [ValidateSet('ready', 'blocked', 'closed', 'rejected')] [string]$Status,
         [Parameter(Mandatory)] [string]$Reason,
-        [Parameter(Mandatory)] [string[]]$Evidence
+        [Parameter(Mandatory)] [string[]]$Evidence,
+        # What a blocked item is waiting on -- a prerequisite discovery id, a task id, or an
+        # open decision id from the owning project's Open Decisions document. Reason alone
+        # cannot carry this: it goes to the event log and never lands on the item, so before
+        # 2026-08-08 there was no guarded way to record why an item was blocked, while
+        # Test-TaskStateFormat.ps1 required exactly that record. The gate demanded a field the
+        # only legal writer could not set, and hand-editing the state file is forbidden.
+        [string[]]$Blockers = @()
     )
     if (-not (Test-WorkScopeLockHeld -Root $Root)) {
         $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
@@ -2513,16 +4757,540 @@ function Set-WorkScopeDiscoveryStatus {
     if ($previousStatus -eq $Status) {
         throw "Backburner item '$Id' is already '$Status'."
     }
+    $cleanBlockers = @($Blockers | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { ([string]$_).Trim() })
+    if ($cleanBlockers.Count -gt 0 -and $Status -ne 'blocked') {
+        throw "Blockers are only meaningful on a blocked item; '$Id' is being set to '$Status'."
+    }
+    if ($Status -eq 'blocked' -and $cleanBlockers.Count -eq 0 -and @($item.blockers).Count -eq 0 -and @($item.dependencies).Count -eq 0) {
+        throw "Blocking '$Id' requires -Blockers naming what it waits on: a prerequisite id, or an open decision id from the owning project's Open Decisions document."
+    }
     $item.status = $Status
+    if ($cleanBlockers.Count -gt 0) {
+        $item.blockers = $cleanBlockers
+    }
+    elseif ($Status -ne 'blocked') {
+        # A status change regenerates the record in place rather than leaving a stale reason
+        # beside a new status -- the contract's rule that task state never accumulates
+        # parallel sections telling different stories about the same item.
+        $item.blockers = @()
+    }
+    $resumedCapabilityId = $null
+    if ($previousStatus -eq 'blocked' -and $Status -eq 'ready') {
+        $resumeTrack = Get-StateTrack -State $state -TrackId $item.suggested_track
+        $resumeCapability = if ($null -ne $resumeTrack) {
+            Get-StateCapability -State $state -TrackId $item.suggested_track -CapabilityId $item.suggested_capability
+        } else { $null }
+        if ($null -ne $resumeCapability -and $resumeCapability.status -eq 'blocked') {
+            # The guarded blocked -> ready disposition is the explicit assertion that this
+            # discovery's prerequisite has resolved. The capability was parked with the same
+            # work item, so clear its stale blocker at the same transition; otherwise the
+            # selector immediately re-blocks the discovery and there is no supported resume.
+            $resumeCapability.status = 'active'
+            $resumeCapability.blockers = @()
+            $resumedCapabilityId = $resumeCapability.id
+        }
+    }
     $item.evidence = @($item.evidence) + $evidenceReceipts
     Add-WorkScopeEvent -Root $Root -State $state -Type 'discovery_disposition' -Evidence $evidenceReceipts -Data @{
         backburner_id = $Id
         previous_status = $previousStatus
         status = $Status
         reason = $Reason
+        blockers = $cleanBlockers
+        resumed_capability_id = $resumedCapabilityId
     } | Out-Null
     Sync-WorkScopeViews -Root $Root | Out-Null
     return $item
+}
+
+function Resume-WorkScopeBlockedCell {
+    <# A blocked cell was a dead end: Block-WorkScopeCell preserves the blocked discovery when one
+       exists, but once the named prerequisite lifts there was no guarded route back to task
+       materialization.  This is the single exit from `blocked`, so it accepts every blocked cell:
+       one that never came from a discovery, and one holding closed or retired work.  Its safety
+       comes from the status check below rather than from a task count -- a blocked cell was parked,
+       never closed, so resuming it cannot silently reopen a completed cell.  Reopening a *closed*
+       cell remains impossible here and stays the business of Start-WorkScopeFollowup. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$Reason
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Resume-WorkScopeBlockedCell @arguments }
+    }
+    if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Blocked-cell resume requires a reason.' }
+    $state = Read-WorkScopeState -Root $Root
+    if ([string]$state.active.status -ne 'blocked') { throw 'Only a blocked scope cell can be resumed.' }
+    # No task-count gate. Retired tasks are withdrawn work and closed tasks are finished work, and
+    # Block-WorkScopeCell refuses while an open task remains, so a blocked cell's tasks are always
+    # one of those two -- neither is live work that resuming could disturb. The count gate that used
+    # to stand here (relaxed for retired tasks on 2026-08-16, removed once Close-WorkScopeCell began
+    # refusing a blocked cell) would otherwise have left a cell blocked after real work was closed
+    # with no guarded exit at all.
+    $events = @(Get-Content -LiteralPath (Get-WorkScopePaths -Root $Root).Events | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+    $blockEvent = @($events | Where-Object {
+        $_.cell_id -eq $state.active.cell_id -and $_.type -eq 'scope_cell_blocked'
+    } | Select-Object -Last 1)
+    if ($blockEvent.Count -ne 1) { throw "Blocked cell '$($state.active.cell_id)' has no unique blocking provenance." }
+    $blockedDiscoveryIds = @(
+        @($blockEvent[0].data.backburner_ids) |
+            ForEach-Object { [string]$_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+    )
+    # Zero is a legitimate count, not a corruption. Block-WorkScopeCell records `backburner_ids =
+    # @()` whenever no discovery is selected, and two cell kinds are never discovery-bound: the
+    # initial cell from Initialize-WorkScopeProject, and every follow-up cell, since
+    # Start-WorkScopeFollowup refuses to run while a discovery is selected. Demanding exactly one
+    # here meant blocking either kind produced a cell that no guarded transition could leave, with
+    # hand-editing state.json as the only exit -- the one action the contract prohibits. More than
+    # one still refuses: that is genuinely ambiguous provenance and nothing should guess at it.
+    if ($blockedDiscoveryIds.Count -gt 1) { throw "Blocked cell '$($state.active.cell_id)' is bound to more than one blocked discovery." }
+    $item = @()
+    $selectionEventId = $null
+    if ($blockedDiscoveryIds.Count -eq 1) {
+        $blockedDiscoveryId = $blockedDiscoveryIds[0]
+        $blockIndex = [array]::IndexOf($events, $blockEvent[0])
+        if ($blockIndex -le 0) { throw "Blocked cell '$($state.active.cell_id)' has no pre-block selection provenance." }
+        $selection = @(
+            $events[0..($blockIndex - 1)] |
+                Where-Object {
+                    $_.cell_id -eq $state.active.cell_id -and $_.type -in @('frontier_item_selected', 'frontier_handoff_selected') -and
+                    $null -ne $_.data -and [string]$_.data.backburner_id -eq $blockedDiscoveryId
+                }
+        )
+        if ($selection.Count -ne 1) { throw "Blocked cell '$($state.active.cell_id)' has no unique pre-block selection provenance." }
+        $item = @($state.backburner | Where-Object { $_.id -eq $blockedDiscoveryId })
+        if ($item.Count -ne 1 -or [string]$item[0].status -ne 'blocked') {
+            throw "Blocked cell '$($state.active.cell_id)' is not backed by one blocked discovery."
+        }
+        $selectionEventId = [string]$selection[0].event_id
+    }
+
+    $state.active.status = 'active'
+    if ($item.Count -eq 1) {
+        $item[0].status = 'selected'
+        $item[0].blockers = @()
+    }
+    $capability = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
+    if ($null -ne $capability -and [string]$capability.status -eq 'blocked') {
+        $capability.status = 'active'
+        $capability.blockers = @()
+    }
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'scope_cell_resumed' -Evidence @() -Data @{
+        backburner_id = if ($item.Count -eq 1) { [string]$item[0].id } else { $null }
+        selection_event_id = $selectionEventId
+        blocking_event_id = [string]$blockEvent[0].event_id
+        reason = $Reason.Trim()
+        # Recorded truthfully rather than asserted. It was a hardcoded $true only because the
+        # transition once accepted nothing else; an unbound or work-holding resume must not claim
+        # the cell was empty.
+        empty_task_resume = (@($state.active.tasks).Count -eq 0)
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $state.active
+}
+
+function Restore-WorkScopeSelectedDiscovery {
+    <# Older frontier events selected a queue item and later closed the cell, but did not record
+       the backburner id on the closure.  The item therefore stayed selected forever.  Recovery
+       never guesses: the caller supplies the exact selection and closure (or handoff) events,
+       the whole interval must still describe one cell, and a later selection inside it refuses.
+       This keeps the repair auditable without turning selected into a second general disposition
+       path. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$Id,
+        [Parameter(Mandatory)] [ValidateSet('closed', 'ready')] [string]$Status,
+        [Parameter(Mandatory)] [string]$Reason,
+        [Parameter(Mandatory)] [string[]]$Evidence,
+        [Parameter(Mandatory)] [string]$SelectionEventId,
+        [string]$ClosureEventId,
+        [string]$HandoffEventId
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Restore-WorkScopeSelectedDiscovery @arguments }
+    }
+    Assert-SafeWorkScopeId -Id $Id -Label 'Backburner id'
+    if ([string]::IsNullOrWhiteSpace($Reason)) { throw 'Selected-discovery recovery requires a reason.' }
+    if ($Status -eq 'closed' -and [string]::IsNullOrWhiteSpace($ClosureEventId)) { throw 'Closed selected-discovery recovery requires ClosureEventId.' }
+    if ($Status -eq 'ready' -and [string]::IsNullOrWhiteSpace($HandoffEventId)) { throw 'Ready selected-discovery recovery requires HandoffEventId.' }
+    if ($Status -eq 'closed' -and -not [string]::IsNullOrWhiteSpace($HandoffEventId)) { throw 'Closed selected-discovery recovery does not accept HandoffEventId.' }
+    if ($Status -eq 'ready' -and -not [string]::IsNullOrWhiteSpace($ClosureEventId)) { throw 'Ready selected-discovery recovery does not accept ClosureEventId.' }
+
+    $evidenceReceipts = @(ConvertTo-WorkScopeEvidenceReceipts -Evidence $Evidence -Root $Root -Context 'Selected discovery recovery')
+    $state = Read-WorkScopeState -Root $Root
+    $item = @($state.backburner | Where-Object { $_.id -eq $Id })
+    if ($item.Count -ne 1) { throw "Backburner item '$Id' does not exist." }
+    if ([string]$item[0].status -ne 'selected') { throw "Backburner item '$Id' is not selected and does not need selected-discovery recovery." }
+
+    $events = @(Get-Content -LiteralPath (Get-WorkScopePaths -Root $Root).Events | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+    $selectionIndex = -1
+    for ($i = 0; $i -lt $events.Count; $i++) { if ([string]$events[$i].event_id -eq $SelectionEventId) { $selectionIndex = $i; break } }
+    if ($selectionIndex -lt 0) { throw "Selection event '$SelectionEventId' does not exist." }
+    $selection = $events[$selectionIndex]
+    if ($selection.type -notin @('frontier_item_selected', 'frontier_handoff_selected') -or [string]$selection.data.backburner_id -ne $Id) {
+        throw "Selection event '$SelectionEventId' does not select '$Id'."
+    }
+    if ($Status -eq 'ready' -and [string]$selection.type -ne 'frontier_handoff_selected') {
+        throw "Ready selected-discovery recovery requires a frontier handoff selection event."
+    }
+    if ([string]$state.active.cell_id -eq [string]$selection.cell_id -and [string]$state.active.status -eq 'active') {
+        throw "Selected discovery '$Id' still has active cell '$($selection.cell_id)'; recover it through that cell."
+    }
+
+    $terminalEventId = if ($Status -eq 'closed') { $ClosureEventId } else { $HandoffEventId }
+    $terminalIndex = -1
+    for ($i = 0; $i -lt $events.Count; $i++) { if ([string]$events[$i].event_id -eq $terminalEventId) { $terminalIndex = $i; break } }
+    if ($Status -eq 'closed' -and $terminalIndex -le $selectionIndex) { throw "Recovery terminal event '$terminalEventId' must occur after selection '$SelectionEventId'." }
+    if ($Status -eq 'ready' -and $terminalIndex -ne ($selectionIndex - 1)) {
+        throw "Ready recovery handoff event '$terminalEventId' must immediately precede selection '$SelectionEventId'."
+    }
+    $terminal = $events[$terminalIndex]
+    $expectedType = if ($Status -eq 'closed') { 'scope_cell_closed' } else { 'handoff_generated' }
+    if ([string]$terminal.type -ne $expectedType) { throw "Recovery terminal event '$terminalEventId' must be '$expectedType'." }
+    if ([string]$terminal.track_id -ne [string]$selection.track_id -or [string]$terminal.capability_id -ne [string]$selection.capability_id -or [string]$terminal.cell_id -ne [string]$selection.cell_id) {
+        throw "Recovery terminal event '$terminalEventId' does not belong to selected cell '$($selection.cell_id)'."
+    }
+    if ($Status -eq 'ready' -and [string]$terminal.data.backburner_id -ne $Id) {
+        throw "Handoff event '$terminalEventId' does not belong to selected discovery '$Id'."
+    }
+    for ($i = $selectionIndex + 1; $i -lt $terminalIndex; $i++) {
+        if ($events[$i].type -in @('frontier_item_selected', 'frontier_handoff_selected') -and [string]$events[$i].cell_id -eq [string]$selection.cell_id) {
+            throw "Selected cell '$($selection.cell_id)' has intervening selection event '$($events[$i].event_id)'; recovery pairing is ambiguous."
+        }
+    }
+
+    $item[0].status = $Status
+    $item[0].blockers = @()
+    $item[0].evidence = @($item[0].evidence) + $evidenceReceipts
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'selected_discovery_recovered' -Evidence $evidenceReceipts -Data @{
+        backburner_id = $Id
+        status = $Status
+        selection_event_id = $SelectionEventId
+        closure_event_id = if ($Status -eq 'closed') { $ClosureEventId } else { $null }
+        handoff_event_id = if ($Status -eq 'ready') { $HandoffEventId } else { $null }
+        reason = $Reason.Trim()
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $item[0]
+}
+
+function Accept-WorkScopeHandoff {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$Id,
+        [Parameter(Mandatory)] [string]$SelectionEventId,
+        [Parameter(Mandatory)] [string]$HandoffEventId,
+        [Parameter(Mandatory)] [string]$ReceiverSession,
+        [switch]$Confirmed
+    )
+    if (-not $Confirmed) { throw 'Handoff acceptance changes the active cell and ownership; confirm it before applying.' }
+    Assert-SafeWorkScopeId -Id $Id -Label 'Backburner id'
+    if ([string]::IsNullOrWhiteSpace($ReceiverSession)) { throw 'Receiver session is required.' }
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Accept-WorkScopeHandoff @arguments }
+    }
+
+    $paths = Get-WorkScopePaths -Root $Root
+    $state = Read-WorkScopeState -Root $Root
+    $item = @($state.backburner | Where-Object { $_.id -eq $Id }) | Select-Object -First 1
+    if ($null -eq $item) { throw "Backburner item '$Id' does not exist." }
+    if ([string]$item.status -ne 'selected') { throw "Backburner item '$Id' is not a pending handoff." }
+    if ($state.active.status -notin @('closed', 'blocked')) {
+        throw 'The source scope cell must be closed or explicitly blocked before accepting a handoff.'
+    }
+    $sourceCapability = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
+    $sourceOwner = if ($null -eq $sourceCapability) { $null } else { [string]$sourceCapability.owner_session }
+    if (-not [string]::IsNullOrWhiteSpace($sourceOwner) -and $ReceiverSession -eq $sourceOwner) {
+        throw "Receiver session '$ReceiverSession' is the sender for this handoff."
+    }
+    $events = @(Get-WorkScopeValidationEvents -Root $paths.Root)
+    $selectionIndex = -1
+    for ($eventIndex = 0; $eventIndex -lt $events.Count; $eventIndex++) {
+        if ([string]$events[$eventIndex].event_id -eq $SelectionEventId) { $selectionIndex = $eventIndex; break }
+    }
+    if ($selectionIndex -le 0) { throw "Selection event '$SelectionEventId' does not have a preceding handoff event." }
+    $selection = $events[$selectionIndex]
+    $handoff = $events[$selectionIndex - 1]
+    if ($handoff.event_id -ne $HandoffEventId -or $selection.type -ne 'frontier_handoff_selected' -or $handoff.type -ne 'handoff_generated') {
+        throw 'Handoff selection and generated-handoff events are not an adjacent matching pair.'
+    }
+    if ([string]$selection.data.backburner_id -ne $Id -or [string]$handoff.data.backburner_id -ne $Id -or
+        [string]$selection.cell_id -ne [string]$state.active.cell_id) {
+        throw "Handoff event pair does not belong to selected discovery '$Id'."
+    }
+    $expectedPath = ".agents/handoffs/$Id.md"
+    $handoffPath = Resolve-WorkScopeArtifact -Root $paths.Root -Artifact $expectedPath
+    $expectedAbsolutePath = [System.IO.Path]::GetFullPath((Join-Path $paths.Root $handoffPath))
+    $pathComparison = if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    foreach ($recordedPath in @([string]$handoff.data.path, [string]$selection.data.handoff_path)) {
+        $recordedAbsolutePath = if ([System.IO.Path]::IsPathRooted($recordedPath)) {
+            [System.IO.Path]::GetFullPath($recordedPath)
+        }
+        else {
+            [System.IO.Path]::GetFullPath((Join-Path $paths.Root (Resolve-WorkScopeArtifact -Root $paths.Root -Artifact $recordedPath)))
+        }
+        if (-not $expectedAbsolutePath.Equals($recordedAbsolutePath, $pathComparison)) {
+            throw "Handoff artifact does not match selected discovery '$Id'."
+        }
+    }
+    $artifactPath = Join-Path $paths.Root $handoffPath
+    if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) { throw "Handoff artifact '$handoffPath' is missing." }
+    $artifactItem = Get-Item -LiteralPath $artifactPath
+    $artifactHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]$handoff.data.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
+        $artifactHash -ne ([string]$handoff.data.sha256).ToLowerInvariant() -or
+        [int64]$artifactItem.Length -ne [int64]$handoff.data.size_bytes) {
+        throw "Handoff artifact '$handoffPath' does not match its generated-handoff record."
+    }
+    $foreignOwner = [string]$selection.data.owner_session
+    if (-not [string]::IsNullOrWhiteSpace($foreignOwner) -and $ReceiverSession -ne $foreignOwner) {
+        throw "Receiver session '$ReceiverSession' does not match designated handoff owner '$foreignOwner'."
+    }
+    foreach ($owner in @($state.ownership.sessions | Where-Object { $_.session_id -ne $ReceiverSession })) {
+        foreach ($artifact in @($owner.artifacts)) {
+            if (Test-WorkScopeArtifactOverlap -Left $artifact -Right $handoffPath) {
+                throw "Handoff artifact '$handoffPath' overlaps artifact owned by session '$($owner.session_id)'."
+            }
+        }
+    }
+
+    $track = Get-StateTrack -State $state -TrackId $item.suggested_track
+    if ($null -eq $track) {
+        $track = [ordered]@{ id = $item.suggested_track; status = 'active'; capabilities = @() }
+        $state.tracks = @($state.tracks) + @($track)
+    }
+    $capability = Get-StateCapability -State $state -TrackId $track.id -CapabilityId $item.suggested_capability
+    if ($null -eq $capability) {
+        $capability = [ordered]@{
+            id = $item.suggested_capability; name = $item.title; current_depth = $null; target_depth = $item.entry_depth
+            status = 'active'; dependencies = @(ConvertTo-NormalizedArray $item.dependencies); blockers = @(ConvertTo-NormalizedArray $item.blockers)
+            owner_session = $ReceiverSession
+        }
+        $track.capabilities = @($track.capabilities) + @($capability)
+    }
+    else {
+        if (-not [string]::IsNullOrWhiteSpace([string]$capability.owner_session) -and $capability.owner_session -ne $ReceiverSession) {
+            throw "Capability '$($capability.id)' is owned by '$($capability.owner_session)', not receiver '$ReceiverSession'."
+        }
+        $capability.owner_session = $ReceiverSession
+        $capability.status = 'active'
+    }
+    $receiver = @($state.ownership.sessions | Where-Object { $_.session_id -eq $ReceiverSession }) | Select-Object -First 1
+    if ($null -eq $receiver) {
+        $receiver = [ordered]@{ session_id = $ReceiverSession; track_id = $track.id; capability_id = $capability.id; artifacts = @() }
+        $state.ownership.sessions = @($state.ownership.sessions) + @($receiver)
+    }
+    $receiver.track_id = $track.id
+    $receiver.capability_id = $capability.id
+    $receiver.artifacts = @(@($receiver.artifacts) + $handoffPath | Sort-Object -Unique)
+    $state.active = New-ActiveCell -TrackId $track.id -CapabilityId $capability.id -CapabilityName $item.title -Depth $item.entry_depth
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'frontier_handoff_accepted' -Evidence $item.evidence -Data @{
+        backburner_id = $Id; selection_event_id = $SelectionEventId; handoff_event_id = $HandoffEventId
+        receiver_session = $ReceiverSession; handoff_path = $handoffPath; handoff_sha256 = $artifactHash
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return [pscustomobject]@{ transition = 'handoff_accepted'; selected_id = $Id; active = $state.active; receiver_session = $ReceiverSession; handoff_path = $handoffPath }
+}
+
+function Get-WorkScopeOptionalMember {
+    # State reaches the view renderer as a hashtable on one path and as PSCustomObject-shaped JSON
+    # on another, and StrictMode makes a missing property a terminating error rather than $null --
+    # so reading a field that older state files simply do not have has to ask both shapes whether
+    # it exists. Every item captured before corrections existed is exactly that case.
+    param($Item, [Parameter(Mandatory)] [string]$Name)
+    if ($null -eq $Item) { return @() }
+    if ($Item -is [System.Collections.IDictionary]) {
+        if (-not $Item.Contains($Name)) { return @() }
+        return @($Item[$Name] | Where-Object { $_ })
+    }
+    $property = $Item.PSObject.Properties[$Name]
+    if (-not $property) { return @() }
+    return @($property.Value | Where-Object { $_ })
+}
+
+function Set-WorkScopeMember {
+    # The write-side counterpart to Get-WorkScopeOptionalMember, and it exists for the same reason:
+    # state arrives as a hashtable on one path and as PSCustomObject-shaped JSON on another, and a
+    # field the older shape never had has to be created rather than assigned.
+    param(
+        [Parameter(Mandatory)] $Item,
+        [Parameter(Mandatory)] [string]$Name,
+        $Value
+    )
+    if ($Item -is [System.Collections.IDictionary]) {
+        $Item[$Name] = $Value
+        return
+    }
+    if ($Item.PSObject.Properties[$Name]) {
+        $Item.PSObject.Properties[$Name].Value = $Value
+        return
+    }
+    $Item | Add-Member -MemberType NoteProperty -Name $Name -Value $Value -Force
+}
+
+function Get-WorkScopeMemberPairs {
+    param($Item)
+    if ($null -eq $Item) { return @() }
+    if ($Item -is [System.Collections.IDictionary]) {
+        return @($Item.Keys | ForEach-Object { [pscustomobject]@{ Name = $_; Value = $Item[$_] } })
+    }
+    return @($Item.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } })
+}
+
+function Add-WorkScopeDiscoveryCorrection {
+    <# Capture and disposition were the only two things a discovery could receive, so a finding
+       whose facts decayed had exactly one route: close it and recapture it under a new id, which
+       loses the thread between the two records. A closed item had no route at all --
+       Set-WorkScopeDiscoveryStatus refuses a repeat of the status it already holds, so a wrong
+       fact in a closure reason was permanent and the correction ended up living outside the state
+       file, which is the one place the contract says it must not live.
+
+       This is deliberately not a second status writer. It never touches status, so retirement
+       keeps exactly one owner; what it changes is the descriptive record, and it always appends
+       the correction rather than overwriting silently -- the previous value of every field it
+       touches is kept on the item. Legal on a closed or rejected item, which is the whole point.
+       Refused on a selected one, for the same reason disposition is: that item's fate belongs to
+       its scope cell. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [string]$Id,
+        # What is being corrected and why. This is the correcting entry itself, not a note about
+        # one, so it goes onto the item as well as into the event.
+        [Parameter(Mandatory)] [string]$Reason,
+        [Parameter(Mandatory)] [string[]]$Evidence,
+        [string]$Title,
+        [ValidateSet('low', 'medium', 'high')] [string]$Value,
+        [ValidateSet('low', 'medium', 'high')] [string]$Risk,
+        # Classification is execution-facing metadata, so it stays mutable only while a
+        # discovery has a live disposition. Semantic identity is historical metadata and can
+        # reconcile a closed duplicate, but never rewrites an already superseded record.
+        [ValidateSet('actionable', 'waiting', 'human', 'time', 'archive', 'system', 'future')] [string]$ObligationClass,
+        [string]$SemanticKey
+    )
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Add-WorkScopeDiscoveryCorrection @arguments }
+    }
+    Assert-SafeWorkScopeId -Id $Id -Label 'Backburner id'
+    if ([string]::IsNullOrWhiteSpace($Reason)) {
+        throw 'Discovery correction requires a reason.'
+    }
+    $evidenceReceipts = @(ConvertTo-WorkScopeEvidenceReceipts -Evidence $Evidence -Root $Root -Context 'Discovery correction')
+    $state = Read-WorkScopeState -Root $Root
+    $matches = @($state.backburner | Where-Object { $_.id -eq $Id })
+    if ($matches.Count -ne 1) {
+        throw "Backburner item '$Id' does not exist."
+    }
+    $item = $matches[0]
+    if ([string]$item.status -eq 'selected') {
+        throw "Backburner item '$Id' is selected into active work; correct it through its scope cell."
+    }
+    if ($PSBoundParameters.ContainsKey('ObligationClass') -and [string]$item.status -in @('closed', 'rejected')) {
+        throw "Backburner item '$Id' is terminal; its obligation class cannot be corrected."
+    }
+    if ($PSBoundParameters.ContainsKey('SemanticKey')) {
+        Assert-SafeWorkScopeId -Id $SemanticKey -Label 'Discovery semantic identity'
+        if ($null -ne (Get-WorkScopeOptionalMember -Item $item -Name 'superseded_by' | Select-Object -First 1)) {
+            throw "Backburner item '$Id' is superseded; its semantic identity cannot be corrected."
+        }
+        $supersededSources = @($state.backburner | Where-Object {
+            (Get-WorkScopeOptionalMember -Item $_ -Name 'superseded_by' | Select-Object -First 1) -eq $Id
+        })
+        foreach ($source in $supersededSources) {
+            $sourceKey = Get-WorkScopeOptionalMember -Item $source -Name 'semantic_key' | Select-Object -First 1
+            if ([string]$sourceKey -cne $SemanticKey) {
+                throw "Backburner item '$Id' has a semantic identity mismatch with superseded item '$($source.id)'."
+            }
+        }
+    }
+    $changed = [ordered]@{}
+    if ($PSBoundParameters.ContainsKey('Title')) {
+        if ([string]::IsNullOrWhiteSpace($Title)) { throw 'A corrected title cannot be empty.' }
+        if ([string]$item.title -cne $Title) { $changed['title'] = [string]$item.title }
+    }
+    if ($PSBoundParameters.ContainsKey('Value') -and [string]$item.value -cne $Value) {
+        $changed['value'] = [string]$item.value
+    }
+    if ($PSBoundParameters.ContainsKey('Risk') -and [string]$item.risk -cne $Risk) {
+        $changed['risk'] = [string]$item.risk
+    }
+    if ($PSBoundParameters.ContainsKey('ObligationClass') -and [string](Get-WorkScopeOptionalMember -Item $item -Name 'obligation_class' | Select-Object -First 1) -cne $ObligationClass) {
+        $changed['obligation_class'] = Get-WorkScopeOptionalMember -Item $item -Name 'obligation_class' | Select-Object -First 1
+    }
+    if ($PSBoundParameters.ContainsKey('SemanticKey') -and [string](Get-WorkScopeOptionalMember -Item $item -Name 'semantic_key' | Select-Object -First 1) -cne $SemanticKey) {
+        $changed['semantic_key'] = Get-WorkScopeOptionalMember -Item $item -Name 'semantic_key' | Select-Object -First 1
+    }
+    $correction = [ordered]@{
+        corrected_at = Get-UtcTimestamp
+        reason = $Reason.Trim()
+        previous = $changed
+    }
+    if ($changed.Contains('title')) { $item.title = $Title }
+    if ($changed.Contains('value')) { $item.value = $Value }
+    if ($changed.Contains('risk')) { $item.risk = $Risk }
+    if ($changed.Contains('obligation_class')) { $item.obligation_class = $ObligationClass }
+    if ($changed.Contains('semantic_key')) { $item.semantic_key = $SemanticKey }
+    $item.corrections = @(Get-WorkScopeOptionalMember -Item $item -Name 'corrections') + @($correction)
+    $item.evidence = @($item.evidence) + $evidenceReceipts
+    Add-WorkScopeEvent -Root $Root -State $state -Type 'discovery_corrected' -Evidence $evidenceReceipts -Data @{
+        backburner_id = $Id
+        status = [string]$item.status
+        reason = $Reason.Trim()
+        corrected_fields = @($changed.Keys)
+        previous = $changed
+        before = $changed
+        after = [ordered]@{
+            title = if ($changed.Contains('title')) { $item.title } else { $null }
+            value = if ($changed.Contains('value')) { $item.value } else { $null }
+            risk = if ($changed.Contains('risk')) { $item.risk } else { $null }
+            obligation_class = if ($changed.Contains('obligation_class')) { $item.obligation_class } else { $null }
+            semantic_key = if ($changed.Contains('semantic_key')) { $item.semantic_key } else { $null }
+        }
+    } | Out-Null
+    Sync-WorkScopeViews -Root $Root | Out-Null
+    return $item
+}
+
+function Find-WorkScopeLegacyArchiveSource {
+    # Enrollment archives the authored task files into .agents\work\legacy-task-state-<timestamp>\
+    # before the first generated view overwrites them. A project that enrolled without importing
+    # therefore has its only surviving copy there, and no import event will ever name it -- that is
+    # the exact state this lookup recovers from. The hash is the binding, as it is for an imports\
+    # snapshot: a file is accepted only when its SHA-256 equals the one the record declares, so an
+    # archive edited since enrollment is refused rather than trusted.
+    param(
+        [Parameter(Mandatory)] [string]$WorkRoot,
+        [Parameter(Mandatory)] [string]$SourceName,
+        [Parameter(Mandatory)] [string]$Sha256
+    )
+    if (-not (Test-Path -LiteralPath $WorkRoot -PathType Container)) { return $null }
+    foreach ($archiveDirectory in @(
+        Get-ChildItem -LiteralPath $WorkRoot -Directory -Force |
+            Where-Object { $_.Name -like 'legacy-task-state-*' } |
+            Sort-Object -Property Name -Descending
+    )) {
+        $candidate = Join-Path $archiveDirectory.FullName $SourceName
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Sha256.ToLowerInvariant()) { continue }
+        return $candidate
+    }
+    return $null
+}
+
+function Test-LegacyBackburnerMetadataBullet {
+    param([string]$Line)
+    # The migration parser keeps these bold labeled bullets in their preceding Backburner
+    # record. The importer repeats that boundary rule before accepting a provenance claim.
+    return $Line -match '^[-*+]\s+\*\*(?:Goal|Plan|Acceptance|Evidence|Dependencies|Blockers|Risk|Value|Status|Owner|Source|Recommendation|Decision)(?::\*\*|\*\*:):?\s*\S'
 }
 
 function Import-WorkScopeLegacyRecords {
@@ -2624,22 +5392,35 @@ function Import-WorkScopeLegacyRecords {
                 }
             )
             $snapshotReferences = @($matchingSources | ForEach-Object { [string]$_.snapshot_reference } | Sort-Object -Unique)
-            if ($snapshotReferences.Count -ne 1) {
-                throw "Generated legacy view '$sourcePath' has no unique immutable import snapshot for SHA-256 '$sourceSha'."
+            $archiveSourcePath = $null
+            if ($snapshotReferences.Count -eq 0) {
+                $archiveSourcePath = Find-WorkScopeLegacyArchiveSource -WorkRoot $paths.WorkRoot -SourceName $sourceName -Sha256 $sourceSha
             }
-            $snapshotReferenceFromHistory = Resolve-WorkScopeArtifact -Root $paths.Root -Artifact $snapshotReferences[0]
-            $expectedSnapshotName = "legacy-$([System.IO.Path]::GetFileNameWithoutExtension($sourceName)).$sourceSha.md"
-            $expectedSnapshotReference = ".agents/work/imports/$expectedSnapshotName"
-            if ($snapshotReferenceFromHistory -cne $expectedSnapshotReference) {
-                throw "Generated legacy view '$sourcePath' has invalid immutable snapshot provenance."
+            if ($archiveSourcePath) {
+                $absoluteSourcePath = $archiveSourcePath
+                $actualSourceSha = (Get-FileHash -LiteralPath $absoluteSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualSourceSha -cne $sourceSha) {
+                    throw "Legacy enrollment archive for '$sourcePath' changed while being read."
+                }
             }
-            $absoluteSourcePath = Join-Path $paths.Root $snapshotReferenceFromHistory
-            if (-not (Test-Path -LiteralPath $absoluteSourcePath -PathType Leaf)) {
-                throw "Legacy snapshot '$snapshotReferenceFromHistory' is missing for generated view '$sourcePath'."
-            }
-            $actualSourceSha = (Get-FileHash -LiteralPath $absoluteSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actualSourceSha -cne $sourceSha) {
-                throw "Legacy snapshot '$snapshotReferenceFromHistory' changed after import."
+            else {
+                if ($snapshotReferences.Count -ne 1) {
+                    throw "Generated legacy view '$sourcePath' has no unique immutable import snapshot for SHA-256 '$sourceSha'."
+                }
+                $snapshotReferenceFromHistory = Resolve-WorkScopeArtifact -Root $paths.Root -Artifact $snapshotReferences[0]
+                $expectedSnapshotName = "legacy-$([System.IO.Path]::GetFileNameWithoutExtension($sourceName)).$sourceSha.md"
+                $expectedSnapshotReference = ".agents/work/imports/$expectedSnapshotName"
+                if ($snapshotReferenceFromHistory -cne $expectedSnapshotReference) {
+                    throw "Generated legacy view '$sourcePath' has invalid immutable snapshot provenance."
+                }
+                $absoluteSourcePath = Join-Path $paths.Root $snapshotReferenceFromHistory
+                if (-not (Test-Path -LiteralPath $absoluteSourcePath -PathType Leaf)) {
+                    throw "Legacy snapshot '$snapshotReferenceFromHistory' is missing for generated view '$sourcePath'."
+                }
+                $actualSourceSha = (Get-FileHash -LiteralPath $absoluteSourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualSourceSha -cne $sourceSha) {
+                    throw "Legacy snapshot '$snapshotReferenceFromHistory' changed after import."
+                }
             }
         }
         $sourceContent = [System.IO.File]::ReadAllText($absoluteSourcePath)
@@ -2657,6 +5438,9 @@ function Import-WorkScopeLegacyRecords {
         $lineMatch = [regex]::Match($sourceLines[$lineIndex], $linePattern)
         if (-not $lineMatch.Success) {
             throw "Legacy record '$id' does not point to a top-level legacy item."
+        }
+        if ($sourceName -ceq 'BACKBURNER.md' -and (Test-LegacyBackburnerMetadataBullet -Line $sourceLines[$lineIndex])) {
+            throw "Legacy record '$id' points to a Backburner metadata bullet rather than a queue record."
         }
         $expectedMarker = if ($sourceName -ceq 'TASK.md') {
             $lineMatch.Groups[1].Value.ToLowerInvariant()
@@ -2682,6 +5466,9 @@ function Import-WorkScopeLegacyRecords {
             }
             else {
                 $candidate -match '^[-*+]\s+'
+            }
+            if ($sourceName -ceq 'BACKBURNER.md' -and (Test-LegacyBackburnerMetadataBullet -Line $candidate)) {
+                $isNextItem = $false
             }
             if ($isNextItem -or $candidate -match '^#{1,6}\s+') { break }
             $blockEnd++
@@ -2739,6 +5526,15 @@ function Import-WorkScopeLegacyRecords {
                 snapshot_path = $snapshotPath
             }
         }
+        $dependencies = if ($record.Contains('dependencies')) {
+            @(ConvertTo-NormalizedArray $record.dependencies)
+        }
+        else {
+            @()
+        }
+        foreach ($dependency in $dependencies) {
+            Assert-SafeWorkScopeId -Id $dependency -Label "Legacy record '$id' dependency"
+        }
         $normalized.Add([ordered]@{
             id = $id
             title = $expectedTitle
@@ -2748,6 +5544,7 @@ function Import-WorkScopeLegacyRecords {
             source_line = $sourceLine
             original_marker = $expectedMarker
             markdown_block = $expectedBlock
+            dependencies = $dependencies
             blockers = $expectedBlockers
         })
     }
@@ -2756,6 +5553,9 @@ function Import-WorkScopeLegacyRecords {
     if (Test-Path -LiteralPath $paths.Events) {
         foreach ($event in $legacyImportEvents) {
             foreach ($priorRecord in @($event.data.records)) {
+                if ($null -eq $priorRecord.PSObject.Properties['dependencies']) {
+                    $priorRecord | Add-Member -NotePropertyName dependencies -NotePropertyValue @()
+                }
                 $priorId = [string]$priorRecord.id
                 $matchingReceipts = @($event.evidence | Where-Object { $_.subject -eq $priorId })
                 if ($matchingReceipts.Count -ne 1) {
@@ -2802,7 +5602,7 @@ function Import-WorkScopeLegacyRecords {
                 entry_depth = 'D0'
                 discovered_from = "$($record.source_path):L$($record.source_line)"
                 relationship = 'follow-up'
-                dependencies = @()
+                dependencies = @($record.dependencies)
                 blockers = @($record.blockers)
                 conflicts = @()
                 value = 'low'
@@ -2938,7 +5738,7 @@ function Import-WorkScopeLegacyRecords {
                 entry_depth = 'D0'
                 discovered_from = "$($record.source_path):L$($record.source_line)"
                 relationship = 'follow-up'
-                dependencies = @()
+                dependencies = @($record.dependencies)
                 blockers = @($record.blockers)
                 conflicts = @()
                 value = 'low'
@@ -3003,6 +5803,13 @@ function Resolve-WorkScopeDependencies {
     $items = @($state.backburner | Where-Object { $_.status -notin @('closed', 'rejected', 'selected') })
     $knownIds = @($state.backburner | ForEach-Object { $_.id })
     $closedIds = @($state.backburner | Where-Object { $_.status -eq 'closed' } | ForEach-Object { $_.id })
+    $capabilityStatuses = @{}
+    foreach ($capability in @($state.tracks | ForEach-Object { @($_.capabilities) })) {
+        if (-not $capabilityStatuses.ContainsKey($capability.id)) {
+            $capabilityStatuses[$capability.id] = @()
+        }
+        $capabilityStatuses[$capability.id] = @($capabilityStatuses[$capability.id]) + @([string]$capability.status)
+    }
     $inDegree = @{}
     $dependents = @{}
     foreach ($item in $items) {
@@ -3039,8 +5846,26 @@ function Resolve-WorkScopeDependencies {
     }
     $cycleIds = @($inDegree.Keys | Where-Object { $processed -notcontains $_ })
     foreach ($item in $items) {
-        $missing = @($item.dependencies | Where-Object { $knownIds -notcontains $_ })
-        $unclosed = @($item.dependencies | Where-Object { $closedIds -notcontains $_ })
+        # Discovery ids take precedence when a capability uses the same id. That preserves the
+        # existing discovery graph, including its exact status and cycle rules. A capability-only
+        # dependency is satisfied only when every matching capability record is closed.
+        $missing = @($item.dependencies | Where-Object {
+            $knownIds -notcontains $_ -and -not $capabilityStatuses.ContainsKey($_)
+        })
+        $unclosed = @(
+            foreach ($dependency in @($item.dependencies)) {
+                if ($knownIds -contains $dependency) {
+                    if ($closedIds -notcontains $dependency) {
+                        $dependency
+                    }
+                    continue
+                }
+                if ($capabilityStatuses.ContainsKey($dependency) -and
+                    @($capabilityStatuses[$dependency] | Where-Object { $_ -eq 'closed' }).Count -ne @($capabilityStatuses[$dependency]).Count) {
+                    $dependency
+                }
+            }
+        )
         if ($cycleIds -contains $item.id -or $missing.Count -gt 0 -or $unclosed.Count -gt 0 -or
             @($item.blockers).Count -gt 0 -or @($item.conflicts).Count -gt 0) {
             $item.status = 'blocked'
@@ -3068,17 +5893,21 @@ function New-ActiveCell {
         [Parameter(Mandatory)] [string]$TrackId,
         [Parameter(Mandatory)] [string]$CapabilityId,
         [Parameter(Mandatory)] [string]$CapabilityName,
-        [Parameter(Mandatory)] [string]$Depth
+        [Parameter(Mandatory)] [string]$Depth,
+        [string]$CellId,
+        [string]$Goal
     )
+    if ([string]::IsNullOrWhiteSpace($CellId)) { $CellId = "$CapabilityId@$Depth" }
+    if ([string]::IsNullOrWhiteSpace($Goal)) { $Goal = "Complete and verify $CapabilityName at $Depth." }
     return [ordered]@{
         track_id = $TrackId
         capability_id = $CapabilityId
         depth = $Depth
-        cell_id = "$CapabilityId@$Depth"
+        cell_id = $CellId
         status = 'active'
         opened_at = Get-UtcTimestamp
         closed_at = $null
-        goal = "Complete and verify $CapabilityName at $Depth."
+        goal = $Goal
         in_scope = @($CapabilityId)
         out_of_scope = @()
         tasks = @()
@@ -3087,21 +5916,100 @@ function New-ActiveCell {
     }
 }
 
+function Get-WorkScopeEligibleFrontierCandidate {
+    <#
+        The single answer to "which backburner items could the frontier select right now?"
+
+        It exists because two callers used to answer it differently. Get-WorkScopeResume asked only
+        whether ANY ready actionable item existed and, if so, reported `frontier_transition`;
+        Select-WorkScopeFrontier then applied the breadth boundary and threw. A closed cell whose
+        only ready discoveries sat on another track therefore produced a next action that the tool
+        refused to perform -- on every Stop, indefinitely. Worse, both documented escapes (widening
+        the boundary, moving the track) are `boundary_change`, which projects list in
+        frontier.stop_on, so no agent could resolve it. Measured on agent-harness 2026-08-15.
+
+        Both callers read from here now, so the promise and the action cannot drift apart again.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $State,
+        [switch]$TakeIndependentTrack
+    )
+
+    # A capability or track boundary filters the foreign-track item out before the handoff branch is
+    # reached, so the override has to widen the boundary for this call to mean anything.
+    $effectiveBoundary = if ($TakeIndependentTrack -and @('capability', 'track') -contains $State.frontier.breadth_boundary) {
+        'project'
+    }
+    else {
+        $State.frontier.breadth_boundary
+    }
+
+    # Older states carry no obligation class. They keep the historical ready-item behavior; only an
+    # explicitly non-actionable class stays queued without entering execution.
+    $candidates = @($State.backburner | Where-Object {
+        $_.status -eq 'ready' -and
+        $null -eq (Get-WorkScopeOptionalMember -Item $_ -Name 'superseded_by' | Select-Object -First 1) -and
+        ((Get-WorkScopeOptionalMember -Item $_ -Name 'obligation_class' | Select-Object -First 1) -in @($null, 'actionable'))
+    })
+
+    switch ($effectiveBoundary) {
+        'capability' {
+            $candidates = @($candidates | Where-Object { $_.suggested_capability -eq $State.active.capability_id })
+        }
+        'track' {
+            $candidates = @($candidates | Where-Object { $_.suggested_track -eq $State.active.track_id })
+        }
+        'project' {
+            $candidates = @($candidates | Where-Object { $_.project -eq $State.project.id })
+        }
+        'portfolio' {
+            $candidates = @($candidates | Where-Object { $_.project -eq $State.project.id })
+        }
+        'system' { }
+    }
+
+    return [pscustomobject]@{
+        effective_boundary = $effectiveBoundary
+        candidates = $candidates
+    }
+}
+
 function Select-WorkScopeFrontier {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string]$Root)
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        # Take a foreign-track item into this session for this selection only, without persisting a
+        # frontier change. Starting a genuinely new initiative in an enrolled project otherwise means
+        # rewriting two global settings that were tuned for unrelated work -- widening the breadth
+        # boundary and turning independent-track handoff off -- and then remembering to put both back.
+        # This narrows that to one audited call: the settings on disk are untouched, and the override
+        # is recorded in the selection event so the reason a foreign track opened stays legible.
+        [string]$DiscoveryId,
+        [switch]$TakeIndependentTrack,
+        [switch]$Confirmed
+    )
+    if (-not [string]::IsNullOrWhiteSpace($DiscoveryId) -and -not $Confirmed) {
+        throw 'Choosing a named frontier item is consequential; show the interpretation and confirm it before selecting.'
+    }
+    if ($TakeIndependentTrack -and -not $Confirmed) {
+        throw 'Taking an independent track into this session is consequential; show the interpretation and confirm it before selecting.'
+    }
     if (-not (Test-WorkScopeLockHeld -Root $Root)) {
         $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
         return Invoke-WithWorkScopeLock -Root $Root -Action { Select-WorkScopeFrontier @arguments }
     }
     $state = Read-WorkScopeState -Root $Root
-    if ($state.active.status -ne 'closed') {
-        throw 'The active scope cell must be closed before selecting frontier work.'
+    if ($state.active.status -notin @('closed', 'blocked')) {
+        throw 'The active scope cell must be closed or explicitly blocked before selecting frontier work.'
     }
     if (-not $state.frontier.automatic) {
         Add-WorkScopeEvent -Root $Root -State $state -Type 'frontier_stopped' -Data @{ reason = 'automatic_disabled' } | Out-Null
         Sync-WorkScopeViews -Root $Root | Out-Null
         return [pscustomobject]@{ transition = 'stop'; reason = 'automatic_disabled'; active = $state.active }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DiscoveryId) -and $state.frontier.mode -eq 'drilldown') {
+        throw 'A named frontier item is available only in expand mode; drilldown advances the active capability by depth.'
     }
     if ($state.frontier.mode -eq 'drilldown') {
         $capability = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
@@ -3142,24 +6050,54 @@ function Select-WorkScopeFrontier {
         return [pscustomobject]@{ transition = 'drilldown'; active = $state.active }
     }
 
+    # Boundary resolution and candidate filtering both live in
+    # Get-WorkScopeEligibleFrontierCandidate, which Get-WorkScopeResume also reads, so the action
+    # this function will perform and the action resume promises cannot disagree.
+    $effectiveBoundary = (Get-WorkScopeEligibleFrontierCandidate -State $state -TakeIndependentTrack:$TakeIndependentTrack).effective_boundary
+    $selectionMode = if ([string]::IsNullOrWhiteSpace($DiscoveryId)) { 'strategy' } else { 'targeted' }
+    if ($selectionMode -eq 'targeted') {
+        $requested = @($state.backburner | Where-Object { $_.id -eq $DiscoveryId }) | Select-Object -First 1
+        if ($null -eq $requested) {
+            throw "Named frontier target '$DiscoveryId' does not exist."
+        }
+    }
+
+    # Dependency status is derived state. Resolve it before judging a named target so a
+    # prerequisite completed since the last pass can make its dependent selectable this call.
     Resolve-WorkScopeDependencies -Root $Root | Out-Null
     $state = Read-WorkScopeState -Root $Root
-    $candidates = @($state.backburner | Where-Object { $_.status -eq 'ready' })
-    switch ($state.frontier.breadth_boundary) {
-        'capability' {
-            $candidates = @($candidates | Where-Object { $_.suggested_capability -eq $state.active.capability_id })
+    if ($selectionMode -eq 'targeted') {
+        $requested = @($state.backburner | Where-Object { $_.id -eq $DiscoveryId }) | Select-Object -First 1
+        if ($null -eq $requested -or $requested.status -ne 'ready' -or
+            ((Get-WorkScopeOptionalMember -Item $requested -Name 'obligation_class' | Select-Object -First 1) -notin @($null, 'actionable'))) {
+            throw "Named frontier target '$DiscoveryId' is not ready after dependency resolution."
         }
-        'track' {
-            $candidates = @($candidates | Where-Object { $_.suggested_track -eq $state.active.track_id })
+        $insideBoundary = switch ($effectiveBoundary) {
+            'capability' { $requested.suggested_capability -eq $state.active.capability_id }
+            'track' { $requested.suggested_track -eq $state.active.track_id }
+            'project' { $requested.project -eq $state.project.id }
+            'portfolio' { $requested.project -eq $state.project.id }
+            default { $true }
         }
-        'project' {
-            $candidates = @($candidates | Where-Object { $_.project -eq $state.project.id })
+        if (-not $insideBoundary) {
+            throw "Named frontier target '$DiscoveryId' is outside the effective breadth boundary."
         }
-        'portfolio' {
-            $candidates = @($candidates | Where-Object { $_.project -eq $state.project.id })
+        $requestedTrack = Get-StateTrack -State $state -TrackId $requested.suggested_track
+        $requestedCapability = if ($null -ne $requestedTrack) {
+            $requestedTrack.capabilities | Where-Object { $_.id -eq $requested.suggested_capability } | Select-Object -First 1
+        } else { $null }
+        if ($null -ne $requestedCapability) {
+            $closedCapabilityIds = @($state.tracks.capabilities | Where-Object { $_.status -eq 'closed' } | ForEach-Object { $_.id })
+            $unmetCapabilityDependencies = @($requestedCapability.dependencies | Where-Object { $closedCapabilityIds -notcontains $_ })
+            if ($requestedCapability.status -eq 'blocked' -or @($requestedCapability.blockers).Count -gt 0 -or $unmetCapabilityDependencies.Count -gt 0) {
+                throw "Named frontier target '$DiscoveryId' has a blocked capability."
+            }
         }
-        'system' { }
     }
+
+    # Re-resolved against the state reloaded after dependency resolution above, so a prerequisite
+    # completed since the first read can make its dependent selectable on this call.
+    $candidates = @((Get-WorkScopeEligibleFrontierCandidate -State $state -TakeIndependentTrack:$TakeIndependentTrack).candidates)
     if ($candidates.Count -eq 0) {
         throw 'No ready backburner item is eligible inside the declared breadth boundary.'
     }
@@ -3167,6 +6105,13 @@ function Select-WorkScopeFrontier {
     $selectionRules = Get-Content -LiteralPath $paths.SelectionRules -Raw | ConvertFrom-Json -AsHashtable
     $valueRank = $selectionRules.value_weights
     $riskRank = $selectionRules.risk_weights
+    if ($selectionMode -eq 'targeted') {
+        $selected = @($candidates | Where-Object { $_.id -eq $DiscoveryId }) | Select-Object -First 1
+        if ($null -eq $selected) {
+            throw "Named frontier target '$DiscoveryId' is outside the effective breadth boundary."
+        }
+    }
+    else {
     switch ($state.frontier.selection_strategy) {
         'highest-value' {
             $selected = @($candidates | Sort-Object @{ Expression = { $valueRank[$_.value] }; Descending = $true }, @{ Expression = 'captured_at'; Descending = $false })[0]
@@ -3184,6 +6129,7 @@ function Select-WorkScopeFrontier {
             $selected = @($candidates | Sort-Object @{ Expression = { @(ConvertTo-NormalizedArray $_.dependencies).Count }; Descending = $false }, @{ Expression = { $valueRank[$_.value] }; Descending = $true }, @{ Expression = 'captured_at'; Descending = $false })[0]
         }
     }
+    }
     $track = Get-StateTrack -State $state -TrackId $selected.suggested_track
     $capability = if ($null -ne $track) {
         $track.capabilities | Where-Object { $_.id -eq $selected.suggested_capability } | Select-Object -First 1
@@ -3196,7 +6142,11 @@ function Select-WorkScopeFrontier {
         )
         $unmetCapabilityDependencies = @($capability.dependencies | Where-Object { $closedCapabilityIds -notcontains $_ })
         if ($capability.status -eq 'blocked' -or @($capability.blockers).Count -gt 0 -or $unmetCapabilityDependencies.Count -gt 0) {
+            if ($selectionMode -eq 'targeted') {
+                throw "Named frontier target '$DiscoveryId' has a blocked capability."
+            }
             $selected.status = 'blocked'
+            $selected.blockers = @(@($capability.blockers) + @($unmetCapabilityDependencies) | Sort-Object -Unique)
             Add-WorkScopeEvent -Root $Root -State $state -Type 'frontier_stopped' -Evidence $selected.evidence -Data @{
                 reason = 'target_capability_blocked'
                 backburner_id = $selected.id
@@ -3213,9 +6163,12 @@ function Select-WorkScopeFrontier {
         -not [string]::IsNullOrWhiteSpace([string]$capability.owner_session) -and
         $capability.owner_session -ne $currentCapability.owner_session
     )
+    # The override waives the independent-*track* handoff only. A capability another session owns is
+    # still handed over, because that guard protects someone else's artifacts rather than this
+    # session's convenience, and no per-call switch should be able to take it.
     $needsHandoff = (
         $state.frontier.handoff_independent_tracks -and
-        ($selected.suggested_track -ne $state.active.track_id -or $foreignOwner)
+        (($selected.suggested_track -ne $state.active.track_id -and -not $TakeIndependentTrack) -or $foreignOwner)
     )
     if ($needsHandoff) {
         $handoffPath = Join-Path $paths.HandoffRoot "$($selected.id).md"
@@ -3235,6 +6188,8 @@ function Select-WorkScopeFrontier {
         Add-WorkScopeEvent -Root $Root -State $state -Type 'frontier_handoff_selected' -Evidence $selected.evidence -Data @{
             backburner_id = $selected.id
             strategy = $state.frontier.selection_strategy
+            selection_mode = $selectionMode
+            requested_backburner_id = $DiscoveryId
             handoff_path = $handoff.path
             owner_session = if ($foreignOwner) { $capability.owner_session } else { $null }
         } | Out-Null
@@ -3273,10 +6228,18 @@ function Select-WorkScopeFrontier {
         -not [string]::IsNullOrWhiteSpace($continuingOwner)) {
         $capability.owner_session = $continuingOwner
     }
-    $state.active = New-ActiveCell -TrackId $track.id -CapabilityId $capability.id -CapabilityName $capability.name -Depth $selected.entry_depth
+    if ((ConvertTo-DepthIndex $selected.entry_depth) -gt (ConvertTo-DepthIndex $capability.target_depth)) {
+        $capability.target_depth = $selected.entry_depth
+    }
+    $capability.status = 'active'
+    $state.active = New-ActiveCell -TrackId $track.id -CapabilityId $capability.id -CapabilityName $selected.title -Depth $selected.entry_depth
     Add-WorkScopeEvent -Root $Root -State $state -Type 'frontier_item_selected' -Evidence $selected.evidence -Data @{
         backburner_id = $selected.id
         strategy = $state.frontier.selection_strategy
+        selection_mode = $selectionMode
+        requested_backburner_id = $DiscoveryId
+        took_independent_track = [bool]$TakeIndependentTrack
+        effective_breadth_boundary = $effectiveBoundary
     } | Out-Null
     Sync-WorkScopeViews -Root $Root | Out-Null
     return [pscustomobject]@{
@@ -3305,11 +6268,23 @@ function New-WorkScopeHandoff {
     }
     $paths = Get-WorkScopePaths -Root $Root
     $artifactOwners = @($state.ownership.sessions | ForEach-Object {
-        "- $($_.session_id): $(@($_.artifacts) -join ', ')"
+        $artifacts = @($_.artifacts) -join ', '
+        if ([string]::IsNullOrWhiteSpace($artifacts)) {
+            "- $($_.session_id):"
+        }
+        else {
+            "- $($_.session_id): $artifacts"
+        }
     })
     if ($artifactOwners.Count -eq 0) {
         $artifactOwners = @('- None declared')
     }
+    $dependencies = @($item.dependencies) -join ', '
+    $blockers = @($item.blockers) -join ', '
+    $conflicts = @($item.conflicts) -join ', '
+    $dependenciesLine = if ([string]::IsNullOrWhiteSpace($dependencies)) { '- Dependencies:' } else { "- Dependencies: $dependencies" }
+    $blockersLine = if ([string]::IsNullOrWhiteSpace($blockers)) { '- Blockers:' } else { "- Blockers: $blockers" }
+    $conflictsLine = if ([string]::IsNullOrWhiteSpace($conflicts)) { '- Conflicts:' } else { "- Conflicts: $conflicts" }
     $content = @"
 # Work-scope handoff: $($item.id)
 
@@ -3333,9 +6308,9 @@ $($item.title)
 
 ## Dependencies and blockers
 
-- Dependencies: $(@($item.dependencies) -join ', ')
-- Blockers: $(@($item.blockers) -join ', ')
-- Conflicts: $(@($item.conflicts) -join ', ')
+$dependenciesLine
+$blockersLine
+$conflictsLine
 
 ## Artifact ownership
 
@@ -3375,11 +6350,15 @@ Resume project $($item.project), track $($item.suggested_track), capability $($i
     }
     $temporaryPath = Join-Path $handoffRoot (".$BackburnerId.$([guid]::NewGuid().ToString('N')).tmp")
     Set-Content -LiteralPath $temporaryPath -Value $content -Encoding utf8NoBOM
+    $handoffItem = Get-Item -LiteralPath $temporaryPath
+    $handoffHash = (Get-FileHash -LiteralPath $temporaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
     try {
         Add-WorkScopeEvent -Root $Root -State $state -Type 'handoff_generated' -Data @{
             backburner_id = $BackburnerId
             path = $path
             overwrite = [bool]$Overwrite
+            sha256 = $handoffHash
+            size_bytes = [int64]$handoffItem.Length
         } -FileCommit @{
             temporary_path = $temporaryPath
             final_path = $path
@@ -3397,16 +6376,84 @@ Resume project $($item.project), track $($item.suggested_track), capability $($i
     return [pscustomobject]@{ path = $path; backburner_id = $BackburnerId }
 }
 
+function Get-WorkScopeBlockedContext {
+    param(
+        [Parameter(Mandatory)] [string]$Root,
+        [Parameter(Mandatory)] [System.Collections.IDictionary]$State,
+        $ValidationContext
+    )
+    if ([string]$State.active.status -ne 'blocked') {
+        return $null
+    }
+
+    # A blocked cell's reason is event-only, while its durable named blockers are
+    # repeated on the capability and selected discovery. Render and resume need all
+    # three owners so a reader can resolve the actual prerequisite without opening
+    # state.json or reconstructing the event chain by hand.
+    $blockEvent = @(
+        Get-WorkScopeValidationEvents -Root $Root -Context $ValidationContext |
+            Where-Object {
+                $_.type -eq 'scope_cell_blocked' -and
+                $_.cell_id -eq $State.active.cell_id
+            }
+    ) | Select-Object -Last 1
+    $capability = Get-StateCapability -State $State -TrackId $State.active.track_id -CapabilityId $State.active.capability_id
+    $discoveryIds = @(
+        if ($null -ne $blockEvent -and $null -ne $blockEvent.data) {
+            ConvertTo-NormalizedArray $blockEvent.data.backburner_ids
+        }
+    )
+    $discoveries = @(
+        foreach ($discoveryId in $discoveryIds) {
+            $State.backburner | Where-Object { $_.id -eq $discoveryId } | Select-Object -First 1
+        }
+    ) | Where-Object { $null -ne $_ }
+    $blockers = @(
+        if ($null -ne $blockEvent -and $null -ne $blockEvent.data) {
+            ConvertTo-NormalizedArray $blockEvent.data.blockers
+        }
+        ConvertTo-NormalizedArray $capability.blockers
+        foreach ($discovery in $discoveries) {
+            ConvertTo-NormalizedArray $discovery.blockers
+        }
+    ) |
+        ForEach-Object { [string]$_ } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { $_.Trim() } |
+        Sort-Object -Unique
+
+    return [pscustomobject]@{
+        reason = if ($null -eq $blockEvent -or $null -eq $blockEvent.data) { $null } else { [string]$blockEvent.data.reason }
+        blockers = @($blockers)
+        discovery_id = if ($discoveryIds.Count -eq 1) { [string]$discoveryIds[0] } else { $null }
+    }
+}
+
 function Get-WorkScopeResume {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string]$Root)
+    param([Parameter(Mandatory)] [string]$Root, $ValidationContext)
+    # Resume reads state and, for blocked work, event-derived context. Serialize it with the
+    # validator so its action cannot be assembled from the same S1/E0 commit interval.
+    if (-not (Test-WorkScopeLockHeld -Root $Root)) {
+        $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
+        return Invoke-WithWorkScopeLock -Root $Root -Action { Get-WorkScopeResume @arguments }
+    }
     $state = Read-WorkScopeState -Root $Root
     Resolve-TaskStatuses -State $state
+    # Read-side derivation, so a spec cannot be stale relative to the tasks beneath it -- a task
+    # retired since the last write takes its spec back to `active` here rather than leaving a met
+    # spec standing on evidence that no longer exists.
+    Resolve-WorkScopeSpecStatus -State $state
     $nextAction = $null
     if ($state.active.status -eq 'closed') {
         $hasFrontierWork = $false
         if ($state.frontier.automatic -and $state.frontier.mode -eq 'expand') {
-            $hasFrontierWork = @($state.backburner | Where-Object { $_.status -eq 'ready' }).Count -gt 0
+            # The breadth boundary has to be applied HERE, not only in selection. Asking merely
+            # "does any ready item exist?" promised a `frontier_transition` that
+            # Select-WorkScopeFrontier then refused, which is a deadlock no agent can clear --
+            # both escapes are `boundary_change`, a stop_on condition. See
+            # Get-WorkScopeEligibleFrontierCandidate.
+            $hasFrontierWork = @((Get-WorkScopeEligibleFrontierCandidate -State $state).candidates).Count -gt 0
         }
         elseif ($state.frontier.automatic -and $state.frontier.mode -eq 'drilldown') {
             $capability = Get-StateCapability -State $state -TrackId $state.active.track_id -CapabilityId $state.active.capability_id
@@ -3420,11 +6467,35 @@ function Get-WorkScopeResume {
                 @($capability.blockers).Count -eq 0
             )
         }
+        # Spec conformance outranks stopping, and ranks BELOW frontier work: if there is queued work
+        # inside the boundary, do that; only an otherwise-idle agent is asked to look back at the
+        # request. Without this branch an agent stops the moment its queue empties, however far the
+        # result is from what was asked -- which is the drift the spec layer exists to catch.
+        $unmetSpecs = @(Get-WorkScopeUnmetSpec -State $state)
         $nextAction = if ($hasFrontierWork) {
             [pscustomobject]@{ type = 'frontier_transition'; task_id = $null }
         }
+        elseif ($unmetSpecs.Count -gt 0) {
+            [pscustomobject]@{
+                type = 'spec_gap'
+                task_id = $null
+                spec_id = $unmetSpecs[0].id
+                statement = $unmetSpecs[0].statement
+                unmet_count = $unmetSpecs.Count
+            }
+        }
         else {
             [pscustomobject]@{ type = 'stop'; task_id = $null }
+        }
+    }
+    elseif ($state.active.status -eq 'blocked') {
+        $blockedContext = Get-WorkScopeBlockedContext -Root $Root -State $state -ValidationContext $ValidationContext
+        $nextAction = [pscustomobject]@{
+            type = 'resolve_blocker'
+            task_id = $null
+            reason = $blockedContext.reason
+            blockers = @($blockedContext.blockers)
+            discovery_id = $blockedContext.discovery_id
         }
     }
     else {
@@ -3438,8 +6509,37 @@ function Get-WorkScopeResume {
                 acceptance_checks = @($ready[0].acceptance_checks)
             }
         }
-        elseif (@($state.active.tasks).Count -eq 0) {
+        # Retired tasks do not count as work here either. An ACTIVE cell whose only tasks are
+        # retired needs tasks made, exactly like an empty one -- it has no blocker, and reporting
+        # resolve_blocker sent the agent to resolve something that does not exist while the Stop
+        # hook repeated "next action: resolve_blocker" on every turn. Observed 2026-08-16 on this
+        # repository after two probe tasks were retired.
+        #
+        # The concern the previous behaviour encoded is still met: this branch is reached only when
+        # no closed task exists, so it cannot offer an impossible close_cell. A cell holding closed
+        # tasks alongside retired ones has a non-retired count above zero and falls through to the
+        # close_cell branch below, which is the correct destination for it.
+        elseif (@($state.active.tasks | Where-Object { $_.status -ne 'retired' }).Count -eq 0) {
             $nextAction = [pscustomobject]@{ type = 'materialize_tasks'; task_id = $null }
+        }
+        elseif (
+            @($state.active.tasks | Where-Object { $_.status -notin @('closed', 'retired') }).Count -eq 0 -and
+            @($state.active.tasks | Where-Object { $_.status -eq 'closed' }).Count -gt 0
+        ) {
+            # The close command accepts receipt=<id> wrapper strings rather than bare ids,
+            # and only still-closed tasks contribute cell evidence. Retired tasks remain
+            # terminal but deliberately contribute no proof to the resulting closure.
+            $nextAction = [pscustomobject]@{
+                type = 'close_cell'
+                task_id = $null
+                evidence = @(
+                    $state.active.tasks |
+                        Where-Object { $_.status -eq 'closed' } |
+                        ForEach-Object { @($_.evidence) } |
+                        ForEach-Object { "receipt=$($_.receipt_id)" } |
+                        Sort-Object
+                )
+            }
         }
         else {
             $nextAction = [pscustomobject]@{ type = 'resolve_blocker'; task_id = $null }
@@ -3479,10 +6579,31 @@ function ConvertTo-MarkdownList {
     }) -join "`n"
 }
 
+function Format-WorkScopeSpecLines {
+    <# Specs rendered as a checklist, because the only question a reader has about a spec is
+       whether it is met, and a checkbox answers it without being read. #>
+    param([Parameter(Mandatory)] $State)
+    $specs = @(Get-WorkScopeOptionalMember -Item $State -Name 'specs')
+    if ($specs.Count -eq 0) {
+        return '_None declared._ Add one with `Update-WorkState.ps1 -Action add-spec`. A spec is a testable statement of what must be true; there is no separate requirement type.'
+    }
+    return (@($specs | ForEach-Object {
+        $mark = if ($_.status -eq 'met') { 'x' } else { ' ' }
+        $suffix = switch ($_.status) {
+            'met' { " — met by $(@(Get-WorkScopeOptionalMember -Item $_ -Name 'satisfied_by') -join ', ')" }
+            'retired' { ' — retired' }
+            'draft' { ' — draft, not yet graded' }
+            default { '' }
+        }
+        "- [$mark] ``$($_.id)`` $($_.statement)$suffix"
+    })) -join "`n"
+}
+
 function Get-WorkScopeRenderedViews {
     param(
         [Parameter(Mandatory)] [string]$Root,
-        [Parameter(Mandatory)] [hashtable]$State
+        [Parameter(Mandatory)] [hashtable]$State,
+        $ValidationContext
     )
     $track = Get-StateTrack -State $State -TrackId $State.active.track_id
     $capability = Get-StateCapability -State $State -TrackId $State.active.track_id -CapabilityId $State.active.capability_id
@@ -3512,13 +6633,33 @@ function Get-WorkScopeRenderedViews {
     }
     $evidence = ConvertTo-MarkdownList -Items $State.active.evidence
     $discoveries = ConvertTo-MarkdownList -Items $State.active.discoveries
+    $blockedContext = Get-WorkScopeBlockedContext -Root $Root -State $State -ValidationContext $ValidationContext
     $blockers = @($State.active.tasks | Where-Object { $_.status -eq 'blocked' } | ForEach-Object { "$($_.id): dependencies $(@($_.dependencies) -join ', ')" })
+    if ($null -ne $blockedContext) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$blockedContext.reason)) {
+            $blockers += "Reason: $($blockedContext.reason)"
+        }
+        if (@($blockedContext.blockers).Count -gt 0) {
+            $blockers += "Named blockers: $(@($blockedContext.blockers) -join ', ')"
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$blockedContext.discovery_id)) {
+            $blockers += "Backing discovery: $($blockedContext.discovery_id)"
+        }
+    }
     $blockerText = ConvertTo-MarkdownList -Items $blockers
-    $next = Get-WorkScopeResume -Root $Root
+    $next = Get-WorkScopeResume -Root $Root -ValidationContext $ValidationContext
     $nextText = "$($next.next_action.type)"
     if ($next.next_action.task_id) {
         $nextText += ": $($next.next_action.task_id)"
     }
+    $sessionModeLines = @(
+        Get-WorkScopeSessionModes -Root $Root -ValidationContext $ValidationContext |
+            ForEach-Object {
+                $modeEvent = $_
+                "$([string]$modeEvent.data.mode.Substring(0,1).ToUpper() + [string]$modeEvent.data.mode.Substring(1)) mode $([string]$modeEvent.data.status.ToUpper()) - session $($modeEvent.data.session_id); $($modeEvent.data.date); goal: $($modeEvent.data.goal)"
+            }
+    )
+    $sessionModeBanner = if ($sessionModeLines.Count -eq 0) { '' } else { ($sessionModeLines -join "`n") + "`n" }
 
     $projectView = @"
 <!-- GENERATED FROM .agents/work/state.json. DO NOT EDIT DIRECTLY. -->
@@ -3529,6 +6670,14 @@ function Get-WorkScopeRenderedViews {
 - Initiative: $($State.project.initiative_id)
 - Root: $($State.project.root)$(if ($State.project.Contains('remote') -and -not [string]::IsNullOrWhiteSpace([string]$State.project.remote)) { "`n- Remote: $($State.project.remote)" })
 - Breadth boundary: $($State.frontier.breadth_boundary)
+
+## Intent
+
+$(if (@(Get-WorkScopeOptionalMember -Item $State.project -Name 'intent').Count -gt 0) { @(Get-WorkScopeOptionalMember -Item $State.project -Name 'intent')[0] } else { '_Not declared._ Set it with ``Update-WorkState.ps1 -Action set-intent``. Until it is, closure is graded only against receipts, not against what was asked.' })
+
+## Specs
+
+$(Format-WorkScopeSpecLines -State $State)
 
 ## Global definition of done
 
@@ -3563,10 +6712,12 @@ $activeCellSpan in track $activeTrackSpan.
 <!-- GENERATED FROM .agents/work/state.json. DO NOT EDIT DIRECTLY. -->
 # Active Work
 
+$sessionModeBanner
 Project: $($State.project.id)
 Initiative: $($State.project.initiative_id)
 Primary track: $($State.active.track_id)
 Capability: $($State.active.capability_id)
+Cell: $($State.active.cell_id)
 Depth: $($State.active.depth) ($($script:DepthNames[$State.active.depth]))
 Frontier mode: $($State.frontier.mode)
 Depth ceiling: $($State.frontier.depth_ceiling)
@@ -3622,8 +6773,55 @@ $nextText
     }
     else {
         @($State.backburner | ForEach-Object {
-            "| $($_.id) | $($_.title) | $($_.suggested_track) | $($_.suggested_capability) | $($_.entry_depth) | $($_.status) |"
+            $obligationClass = Get-WorkScopeOptionalMember -Item $_ -Name 'obligation_class' | Select-Object -First 1
+            "| $($_.id) | $($_.title) | $($_.suggested_track) | $($_.suggested_capability) | $($_.entry_depth) | $($obligationClass ?? 'actionable') | $($_.status) |"
         }) -join "`n"
+    }
+    # A correction that only exists in state.json is invisible to the reader the view is for,
+    # which is the failure it was built to fix. The table above shows the corrected title; this
+    # section is what says the record was corrected at all, and what it used to say.
+    $correctedItems = @($State.backburner | Where-Object { @(Get-WorkScopeOptionalMember -Item $_ -Name 'corrections').Count -gt 0 })
+    $correctionSection = if ($correctedItems.Count -eq 0) {
+        ''
+    }
+    else {
+        $correctionLines = @(
+            foreach ($correctedItem in $correctedItems) {
+                foreach ($correction in (Get-WorkScopeOptionalMember -Item $correctedItem -Name 'corrections')) {
+                    $previousPairs = @(Get-WorkScopeMemberPairs -Item $correction.previous)
+                    $previousText = if ($previousPairs.Count -eq 0) {
+                        'no field changed'
+                    }
+                    else {
+                        (@($previousPairs | ForEach-Object { "$($_.Name) was '$($_.Value)'" }) -join '; ')
+                    }
+                    "- **$($correctedItem.id)** ($($correction.corrected_at)) - $($correction.reason) [$previousText]"
+                }
+            }
+        ) -join "`n"
+        @"
+
+## Corrections
+
+$correctionLines
+"@
+    }
+    $supersededItems = @($State.backburner | Where-Object {
+        $null -ne (Get-WorkScopeOptionalMember -Item $_ -Name 'superseded_by' | Select-Object -First 1)
+    })
+    $supersessionSection = if ($supersededItems.Count -eq 0) {
+        ''
+    }
+    else {
+        $supersessionLines = @($supersededItems | ForEach-Object {
+            "- **$($_.id)** -> **$(Get-WorkScopeOptionalMember -Item $_ -Name 'superseded_by' | Select-Object -First 1)**"
+        }) -join "`n"
+        @"
+
+## Superseded discoveries
+
+$supersessionLines
+"@
     }
     $backburnerView = @"
 <!-- GENERATED FROM .agents/work/state.json. DO NOT EDIT DIRECTLY. -->
@@ -3631,9 +6829,11 @@ $nextText
 
 This is a discovery queue. It does not become active until a verified frontier transition selects an item.
 
-| ID | Title | Suggested track | Suggested capability | Entry depth | Status |
-|---|---|---|---|---|---|
+| ID | Title | Suggested track | Suggested capability | Entry depth | Class | Status |
+|---|---|---|---|---|---|---|
 $backburnerRows
+$correctionSection
+$supersessionSection
 "@
 
     $paths = Get-WorkScopePaths -Root $Root
@@ -3641,7 +6841,9 @@ $backburnerRows
     if (Test-Path -LiteralPath $paths.Events) {
         $eventLines = @(Get-Content -LiteralPath $paths.Events | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object {
             $event = $_ | ConvertFrom-Json
-            "- $($event.occurred_at) [$($event.type)] cell=$($event.cell_id) event=$($event.event_id)"
+            # No "- " here: ConvertTo-MarkdownList below owns the list prefix, so adding one
+            # rendered every LOG line as "- - 07/31/2026 ...".
+            "$($event.occurred_at) [$($event.type)] cell=$($event.cell_id) event=$($event.event_id)"
         })
     }
     $logView = @"
@@ -3662,13 +6864,13 @@ $(ConvertTo-MarkdownList -Items $eventLines)
 
 function Sync-WorkScopeViews {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string]$Root)
+    param([Parameter(Mandatory)] [string]$Root, $ValidationContext)
     if (-not (Test-WorkScopeLockHeld -Root $Root)) {
         $arguments = Copy-WorkScopeBoundParameters -BoundParameters $PSBoundParameters
         return Invoke-WithWorkScopeLock -Root $Root -Action { Sync-WorkScopeViews @arguments }
     }
     $state = Read-WorkScopeState -Root $Root
-    $views = Get-WorkScopeRenderedViews -Root $Root -State $state
+    $views = Get-WorkScopeRenderedViews -Root $Root -State $state -ValidationContext $ValidationContext
     foreach ($entry in $views.GetEnumerator()) {
         Set-Content -LiteralPath (Join-Path $Root $entry.Key) -Value $entry.Value -Encoding utf8NoBOM -NoNewline
     }
@@ -3702,22 +6904,37 @@ function Test-WorkScopeReconciliation {
 }
 
 Export-ModuleMember -Function @(
+    'Set-WorkScopeIntent'
+    'Add-WorkScopeSpec'
+    'Get-WorkScopeUnmetSpec'
     'Expand-WorkScopePackedArgument'
     'Initialize-WorkScopeProject'
+    'Sync-WorkScopeSchema'
     'Invoke-WorkScopeVerification'
     'Repair-WorkScopeTransaction'
     'Read-WorkScopeState'
+    'Get-WorkScopeCompletion'
     'Test-WorkScopeState'
     'Add-WorkScopeTask'
     'Complete-WorkScopeTask'
+    'Repair-WorkScopeClosedEvidence'
+    'Repair-WorkScopeClosedEvidenceBatch'
     'Set-WorkScopeTaskRetired'
+    'Set-WorkScopeSessionMode'
     'Close-WorkScopeCell'
+    'Start-WorkScopeFollowup'
+    'Block-WorkScopeCell'
     'Set-WorkScopeOwnership'
     'Move-WorkScopeOwnership'
     'Invoke-WorkScopeGuard'
     'Set-WorkScopeFrontier'
     'Add-WorkScopeDiscovery'
+    'Supersede-WorkScopeDiscovery'
     'Set-WorkScopeDiscoveryStatus'
+    'Resume-WorkScopeBlockedCell'
+    'Restore-WorkScopeSelectedDiscovery'
+    'Accept-WorkScopeHandoff'
+    'Add-WorkScopeDiscoveryCorrection'
     'Import-WorkScopeLegacyRecords'
     'Resolve-WorkScopeDependencies'
     'Select-WorkScopeFrontier'
@@ -3728,4 +6945,8 @@ Export-ModuleMember -Function @(
     'ConvertTo-WorkScopeRemoteIdentity'
     'Get-WorkScopeRepositoryIdentity'
     'Set-WorkScopeProjectRemote'
+    'Get-WorkScopeSchemaIdentity'
+    'Get-WorkScopeSchemaViolationList'
+    'Format-WorkScopeSchemaFailure'
+    'Test-WorkScopeSchemaCurrency'
 )

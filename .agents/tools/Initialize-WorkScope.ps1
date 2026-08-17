@@ -15,5 +15,5 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'WorkScope.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'WorkScope.psm1') -Force -DisableNameChecking
 Initialize-WorkScopeProject @PSBoundParameters | ConvertTo-Json -Depth 30

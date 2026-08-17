@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: requesting-code-review
 description: Use when completing tasks, implementing major features, or before merging to verify work meets requirements
+when_to_use: "Before merging, on completing a task, and after any major feature - capture the git SHAs, dispatch a code-reviewer subagent against exactly that range, and act on what comes back. Also names the rationalizations people use to skip review and the red flags that mean it was skipped. Read receiving-code-review for the other half, which is how to respond to the findings."
 ---
 
 # Requesting Code Review

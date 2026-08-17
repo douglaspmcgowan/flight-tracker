@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: writing-plans
 description: Use when you have a spec or requirements for a multi-step task, before touching code
+when_to_use: "A spec or a set of requirements exists for multi-step work and no code has been touched yet. Produces a dated plan document with a required header and a scope check, cut into bite-sized tasks each sized to a single 2-5 minute action, saved under docs/superpowers/plans/. Pair it with using-git-worktrees when the work needs isolation, and hand the finished plan to subagent-driven-development or executing-plans."
 ---
 
 # Writing Plans

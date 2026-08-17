@@ -8,6 +8,14 @@
 - Remote: github.com/douglaspmcgowan/flight-tracker
 - Breadth boundary: capability
 
+## Intent
+
+_Not declared._ Set it with ``Update-WorkState.ps1 -Action set-intent``. Until it is, closure is graded only against receipts, not against what was asked.
+
+## Specs
+
+_None declared._ Add one with `Update-WorkState.ps1 -Action add-spec`. A spec is a testable statement of what must be true; there is no separate requirement type.
+
 ## Global definition of done
 
 - All active-cell tasks are closed with evidence.

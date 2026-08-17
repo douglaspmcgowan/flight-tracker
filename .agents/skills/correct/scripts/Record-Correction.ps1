@@ -172,7 +172,19 @@ $lines.Add("status: $Status")
 $lines.Add("reviewTrigger: $(Normalize-Field $ReviewTrigger)")
 
 $parent = Split-Path $logPath -Parent
-if ($PSCmdlet.ShouldProcess($logPath, 'Append value-free correction record')) {
+$shouldAppend = $false
+try {
+    $shouldAppend = $PSCmdlet.ShouldProcess($logPath, 'Append value-free correction record')
+}
+catch {
+    $explicitConfirm = $PSBoundParameters.ContainsKey('Confirm') -and
+        $ConfirmPreference -ne 'None' -and -not $WhatIfPreference
+    if ($explicitConfirm) {
+        throw 'Explicit confirmation requires an interactive host.'
+    }
+    throw
+}
+if ($shouldAppend) {
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
     if (-not (Test-Path -LiteralPath $logPath)) {
         [System.IO.File]::WriteAllText(

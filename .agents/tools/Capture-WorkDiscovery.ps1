@@ -12,6 +12,8 @@ param(
     [string[]]$Conflicts = @(),
     [Parameter(Mandatory)] [ValidateSet('low', 'medium', 'high')] [string]$Value,
     [Parameter(Mandatory)] [ValidateSet('low', 'medium', 'high')] [string]$Risk,
+    [ValidateSet('actionable', 'waiting', 'human', 'time', 'archive', 'system', 'future')] [string]$ObligationClass = 'actionable',
+    [string]$SemanticKey,
     [Parameter(Mandatory)] [string[]]$Evidence
 )
 

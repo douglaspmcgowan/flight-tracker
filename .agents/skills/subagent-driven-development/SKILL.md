@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: subagent-driven-development
 description: Use when executing implementation plans with independent tasks in the current session
+when_to_use: "Running an implementation plan's independent tasks in THIS session, one fresh subagent per task, each given exactly the context it needs rather than inheriting the session's history - which is also what preserves your own context for coordination. Adds a per-task spec-and-quality review and one broad final review, and covers setup, choosing a model tier per task type, and executing every task continuously without check-in prompts. Use executing-plans instead when the runtime has no subagents, and dispatching-parallel-agents when the work is not a plan at all."
 ---
 
 # Subagent-Driven Development

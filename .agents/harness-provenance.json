@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "AGENTS.md",
-      "sha256": "6d8f7b7b98fc0556857a2c9fd3eee611ce925091d4f0253407344d21ab9e1389"
+      "sha256": "f6235aca5f93442544e2f3b7b06caf386fcb885e585347b95c9651a6ac675ad3"
     },
     {
       "path": "CLAUDE.md",
@@ -28,11 +28,11 @@
     },
     {
       "path": "skills-manifest.json",
-      "sha256": "95192521d9e6f8e854a90189d46883a765158bcfdc88eb7fdf3f2db158a34307"
+      "sha256": "ca7c79b3626b309adf34d1c1dd95d1db3ac466b982b97f1f636df57f8a22c383"
     },
     {
       "path": "data-manifest.yaml",
-      "sha256": "ffc72d8de93628244e7ae1927f55ecd9b357eba973e51405ddfaaeecc4c99200"
+      "sha256": "df2686df984e14f4bc6ff6a9ac538e7a1f4e0be7553ebb83564f0ddccdb7e382"
     },
     {
       "path": "secret-manifest.json",
@@ -40,7 +40,7 @@
     },
     {
       "path": "secret-manifest.md",
-      "sha256": "322de67f4092d8d7ccb9a2d4e4a004f90397d9268a25397e32ff2e8cb133fa18"
+      "sha256": "eb4cf69e5531e6706929f1a50264b03beb79792e9f798402abc733292b597a18"
     },
     {
       "path": ".env.example",

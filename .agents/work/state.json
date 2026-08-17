@@ -9,8 +9,8 @@
       }
     ]
   },
-  "updated_at": "2026-08-08T04:20:35.0197880Z",
-  "last_event_hash": "e85af28b602c56d07d74c80bd3d22c1865bd72273192e29c0c4d34a4c6c502ae",
+  "updated_at": "2026-08-17T00:24:03.3139200Z",
+  "last_event_hash": "931b9761f08fdd97f6c5ec68c5d0e912608c4f3d35491c8dc11b1da23ccf6c4c",
   "frontier": {
     "mode": "drilldown",
     "automatic": true,
@@ -27,7 +27,7 @@
     ]
   },
   "schema_version": "1.0.0",
-  "last_event_id": "a5acf002-5293-4cf1-a0c1-e57393e3070c",
+  "last_event_id": "9b141347-fa7c-460f-ac53-98c771d9f8ba",
   "backburner": [
     {
       "id": "python-312-runtime-missing",
@@ -84,26 +84,26 @@
     "track_id": "project-operations",
     "capability_id": "handoff-completion",
     "depth": "D2",
-    "cell_id": "handoff-completion@D2",
+    "cell_id": "handoff-completion@D2.followup.1",
     "status": "closed",
-    "opened_at": "2026-08-08T04:18:08.5773988Z",
-    "closed_at": "2026-08-08T04:20:19.2628712Z",
-    "goal": "Complete and verify Flight Finder handoff completion at D2.",
+    "opened_at": "2026-08-17T00:05:27.4359561Z",
+    "closed_at": "2026-08-17T00:24:00.4391654Z",
+    "goal": "Follow up on handoff-completion@D2: Closed FT-FULL-CONTRACT evidence has gone stale: Windows silently auto-updated the pinned PowerShell 7 AppX package from 7.6.4.0 to a newer build, so the declared acceptance-check executable path no longer exists, and skills-manifest.json content has also drifted since capture. The underlying verification genuinely passed on 2026-08-08; re-running full-project-contract now against the current environment to refresh the evidence trail.",
     "in_scope": [
       "handoff-completion"
     ],
     "out_of_scope": [],
     "tasks": [
       {
-        "id": "FT-FULL-CONTRACT",
-        "title": "Run the existing shared harness verifier through a project-local PowerShell 7 wrapper because the prescribed legacy cmd owner is incompatible with Process.Kill(true)",
-        "acceptance": "The canonical shared harness project verifier exits zero against the enrolled coordination checkout under PowerShell 7.",
+        "id": "FT-FULL-CONTRACT-V2",
+        "title": "Re-verify full project contract against current environment",
+        "acceptance": "The canonical shared harness project verifier exits zero against the enrolled coordination checkout under the currently installed PowerShell 7.",
         "acceptance_checks": [
           {
             "id": "full-project-contract",
-            "verifier": "test",
-            "executable": "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\\pwsh.exe",
-            "executable_sha256": "db6dd81183fe57d22e03b911ec9a30a2fd7c40542e97743615355a6fb44f458f",
+            "verifier": "command",
+            "executable": "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe\\pwsh.exe",
+            "executable_sha256": "362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139",
             "arguments": [
               "-NoProfile",
               "-File",
@@ -130,45 +130,45 @@
         "status": "closed",
         "evidence": [
           {
-            "receipt_id": "3e112356-826c-4a43-a9fc-d7cedd56d36a",
+            "receipt_id": "11c92ea3-5b9c-402c-ac88-6492b8abae04",
             "check_id": "full-project-contract",
-            "verifier": "test",
-            "subject": "FT-FULL-CONTRACT",
+            "verifier": "command",
+            "subject": "FT-FULL-CONTRACT-V2",
             "result": "pass",
-            "reference": ".agents/work/evidence/3e112356-826c-4a43-a9fc-d7cedd56d36a.json",
-            "sha256": "6eaaa00c00dacd94dc3227092726b13f3034aed7b59991b63713ad7151a5322d",
-            "size_bytes": 1671,
-            "captured_at": "2026-08-08T04:19:44.7830137Z",
+            "reference": ".agents/work/evidence/11c92ea3-5b9c-402c-ac88-6492b8abae04.json",
+            "sha256": "f648fc257ec7191d12a9b2f6112a0c6b177d9d3036f04737e747090342fd1fc7",
+            "size_bytes": 1728,
+            "captured_at": "2026-08-17T00:23:05.7141795Z",
             "exit_code": 0,
-            "provenance_event_id": "4dfa5de8-f103-4232-bde5-71cdb5d49c49",
+            "provenance_event_id": "6f485d76-a877-49b0-aaa7-c05764cab305",
             "project_id": "flight-tracker",
             "track_id": "project-operations",
             "capability_id": "handoff-completion",
-            "cell_id": "handoff-completion@D2",
-            "task_id": "FT-FULL-CONTRACT"
+            "cell_id": "handoff-completion@D2.followup.1",
+            "task_id": "FT-FULL-CONTRACT-V2"
           }
         ],
-        "closed_at": "2026-08-08T04:20:02.4076077Z"
+        "closed_at": "2026-08-17T00:23:48.8551012Z"
       }
     ],
     "evidence": [
       {
-        "receipt_id": "3e112356-826c-4a43-a9fc-d7cedd56d36a",
+        "receipt_id": "11c92ea3-5b9c-402c-ac88-6492b8abae04",
         "check_id": "full-project-contract",
-        "verifier": "test",
-        "subject": "FT-FULL-CONTRACT",
+        "verifier": "command",
+        "subject": "FT-FULL-CONTRACT-V2",
         "result": "pass",
-        "reference": ".agents/work/evidence/3e112356-826c-4a43-a9fc-d7cedd56d36a.json",
-        "sha256": "6eaaa00c00dacd94dc3227092726b13f3034aed7b59991b63713ad7151a5322d",
-        "size_bytes": 1671,
-        "captured_at": "2026-08-08T04:19:44.7830137Z",
+        "reference": ".agents/work/evidence/11c92ea3-5b9c-402c-ac88-6492b8abae04.json",
+        "sha256": "f648fc257ec7191d12a9b2f6112a0c6b177d9d3036f04737e747090342fd1fc7",
+        "size_bytes": 1728,
+        "captured_at": "2026-08-17T00:23:05.7141795Z",
         "exit_code": 0,
-        "provenance_event_id": "4dfa5de8-f103-4232-bde5-71cdb5d49c49",
+        "provenance_event_id": "6f485d76-a877-49b0-aaa7-c05764cab305",
         "project_id": "flight-tracker",
         "track_id": "project-operations",
         "capability_id": "handoff-completion",
-        "cell_id": "handoff-completion@D2",
-        "task_id": "FT-FULL-CONTRACT"
+        "cell_id": "handoff-completion@D2.followup.1",
+        "task_id": "FT-FULL-CONTRACT-V2"
       }
     ],
     "discoveries": []
@@ -191,6 +191,6 @@
       ]
     }
   ],
-  "revision": 24,
+  "revision": 30,
   "created_at": "2026-08-08T02:52:03.73101Z"
 }

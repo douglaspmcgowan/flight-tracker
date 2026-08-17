@@ -7,4 +7,4 @@
 
 ## Active cell
 
-`handoff-completion@D2` in track `project-operations`.
+`handoff-completion@D2.followup.1` in track `project-operations`.

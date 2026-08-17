@@ -112,6 +112,47 @@ try {
     $safeHash.Evidence = @('sha256: ' + ('a' * 64), 'verification-before-completion')
     & $script @safeHash | Out-Null
 
+    $whatIfRepo = Join-Path $root 'whatif-repo'
+    $whatIf = @{}
+    foreach ($entry in $base.GetEnumerator()) { $whatIf[$entry.Key] = $entry.Value }
+    $whatIf.Id = 'correction-20260729-whatif'
+    $whatIf.Repository = $whatIfRepo
+    New-Item -ItemType Directory -Path $whatIfRepo -Force | Out-Null
+    & $script @whatIf -WhatIf | Out-Null
+    if (Test-Path -LiteralPath (Join-Path $whatIfRepo '.agents\feedback\FEEDBACK-LOG.md')) {
+        throw 'WhatIf created a correction log.'
+    }
+
+    $nonInteractiveRepo = Join-Path $root 'noninteractive-confirm-repo'
+    New-Item -ItemType Directory -Path $nonInteractiveRepo -Force | Out-Null
+    $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+    $confirmArguments = @(
+        '-NoProfile',
+        '-NonInteractive',
+        '-File', $script,
+        '-Id', 'correction-20260729-noninteractive-confirm',
+        '-Incident', 'Explicit confirmation must fail closed without an interactive host.',
+        '-RootCauseStatus', 'reproduced',
+        '-ArtifactDecision', 'extend',
+        '-ExistingSearch', 'Record-Correction.ps1',
+        '-Scope', 'project',
+        '-Enforcement', 'test',
+        '-Evidence', 'Record-Correction.test.ps1',
+        '-Repository', $nonInteractiveRepo,
+        '-Confirm:$true'
+    )
+    $confirmOutput = @(& $pwsh @confirmArguments 2>&1 | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    $confirmExitCode = $LASTEXITCODE
+    if ($confirmExitCode -eq 0) {
+        throw 'Explicit confirmation unexpectedly succeeded without an interactive host.'
+    }
+    if (-not $confirmOutput.Contains('Explicit confirmation requires an interactive host.')) {
+        throw "Explicit confirmation did not fail with the stable noninteractive-host message: $confirmOutput"
+    }
+    if (Test-Path -LiteralPath (Join-Path $nonInteractiveRepo '.agents\feedback\FEEDBACK-LOG.md')) {
+        throw 'Explicit confirmation wrote a correction log after refusing the noninteractive host.'
+    }
+
     Write-Output 'Correction skill tests passed.'
 }
 finally {

@@ -5,76 +5,43 @@ This repository contract travels with the project for Claude, Codex, Cursor, and
 <!-- agent-harness:portable:v4:start -->
 ## Portable operating rules
 
-Use subagents immediately for every independent, file-disjoint workstream. This is explicit authorization to parallelize. Keep only destructive or dependent final gates serial.
+If your role can brief, use subagents immediately for every independent, file-disjoint workstream — that is explicit authorization to parallelize. Keep only destructive or dependent final gates serial. A role carrying no `spawns:` does the work itself.
 
 Agents may create local commits for in-scope work without asking. Never push, merge, force-update, discard, delete a worktree, or remove a task workspace unless the user explicitly authorizes that action.
 
-- Answer questions before task narration. Keep routine updates concise.
-- Never invent facts, paths, APIs, versions, source content, measurements, credential state, or passing results. Name the source checked.
-- Verify inherited claims against repository, Git, runtime, or current primary evidence.
-- Match commands and paths to the user's actual shell and device.
-- Avoid the rhetorical "it is X, not Y" construction.
-- Preserve unrelated changes. Inspect exact targets before destructive or broad operations and prefer recoverable changes.
-- Before creating, replacing, renaming, or removing an artifact, search the repository and available shared harness for its existing owner, equivalents, consumers, wiring, tests, and documentation. Extend or consolidate the closest adequate owner. Record search evidence and the reason for a truly new owner in authoritative task state.
-- Extract every discrete obligation from a multi-step prompt into authoritative task state. In an enrolled project, use Work Scope tasks or discoveries; otherwise use legacy `TASK.md` checkboxes.
-- Read a named or clearly matching skill in full. Keep canonical workflows under `.agents\skills` and product adapters thin.
-- Reproduce bugs before fixing them and add a regression test when practical. Exercise the assembled system under the condition that exposed the failure.
-- For browser-visible changes, run the repository browser or end-to-end verifier.
-- When a correction requests permanent prevention, use the `correct` skill and implement a durable, narrowly scoped artifact.
-- Treat `MEMORY.md` as a lean index. Keep behavior in instructions, skills, hooks, permissions, tests, or verifiers.
-- Before claiming non-trivial work complete, run the verification recorded in authoritative task state, relevant tests, and an adversarial pass.
+- Answer questions before task narration. Keep routine updates concise. Durable reader-facing results follow `.agents/DOCKET-PROTOCOL.md` → **Brief quality**.
+- Never invent facts, paths, APIs, versions, measurements, source content, credential state, or passing results. Verify inherited claims against repository, Git, runtime, or current primary evidence.
+- Preserve unrelated changes. Inspect exact targets before destructive work. Never read, display, log, export, or commit credential values.
+- Before creating, replacing, renaming, or removing an artifact, search the repository and available shared harness for its owner, equivalents, consumers, wiring, tests, and documentation. Extend the closest adequate owner, make the touch list, and record the result in authoritative task state.
+- Resolve `~` and `$HOME` at runtime. Use the repository's tracked `.agents/` material when a fresh machine or cloud container has no `~/.agents`; do not vendor another copy. `INDEX.md` is the canonical skills catalogue, `WORKTREE-PROTOCOL.md` owns isolated worktrees, `VAULT-PROTOCOL.md` owns vault work, and `DOCKET-PROTOCOL.md` owns briefs and decisions.
+- Read a named or matching skill in full. Use `brainstorming` for creative or underspecified work, `test-driven-development` for implementation, `systematic-debugging` for bugs, and `requesting-code-review` plus `verification-before-completion` before completion. Route independent, file-disjoint work through `dispatching-parallel-agents`; use the `correct` skill for durable prevention after a recurring correction.
+- Use one build loop: product or feature work starts from current specification; personal systems and one-off work use project intent plus observable acceptance. Materialize work, verify it, then re-read the resulting project state against the original intent; when they diverge, re-enter the loop at the earliest stale stage.
 
-**This project's `skills-manifest.json` is not the catalogue.** It binds the few skills this repository requires, and it is deliberately small — most of the harness is installed on the machine and bound to no project at all, so a capability being absent from that manifest says nothing about whether it exists. The catalogue is `~/.agents/INDEX.md`, generated, listing every canonical skill and command with its purpose and per-product visibility; the design material is `~/.agents/design/LIBRARIES.md` and the `design/` tree beside it, which owns animation packages, icon kits, typefaces, design systems, the registry of committed design languages, surface-construction craft, the pre-ship matrix, and the slide and poster medium. Read the index before hand-rolling a workflow, choosing a package, or concluding a capability is missing.
+## Start and task state
 
-When `~/.agents` does not exist — a cloud container, a fresh machine, any session with no installed harness — that material is not gone; it is in the private harness repository `pyrgos-ai/doug-harness` under `.agents/`, and pulling the file you need from there is the intended route rather than a workaround. Clone or fetch it read-only, use what you need, and never vendor a copy into this repository: a second copy drifts, and the existing-system-first rule above applies to skills and design material exactly as it applies to code.
+1. Read this file, current task state, recent `LOG.md`, and `INTENT.md` when present.
+2. Run `git status --short --branch`, inspect worktrees, then read `MAP.md` and `DESIGN.md` when relevant.
 
-**Read what other projects' agents filed against this one, at the start, before deciding what to work on.** An agent that finds something wrong here while working somewhere else records it and does not fix it — that is the standing rule, and the record lands in one of two places depending on this project's mode. When `.agents/work/state.json` exists, filed items are ordinary discoveries in the Work Scope queue and `Get-WorkResume.ps1` surfaces them like any other. Otherwise they are in the `agent-harness:intake:v1` managed block in this project's `BACKBURNER.md`, and **nothing surfaces that block automatically**, so reading it is yours to do. Triage what is there, promote what you take into `TASK.md`, and delete nothing to make a count look smaller; an item you reject stays with the reason.
+These sit at the project root, not under `.agents/`; an empty read is a failed step, not an absent file. A task that writes nothing runs step 1 only, plus `MAP.md`, and says so in its report. The sequence guards writes; the moment the task acquires one, all of it is owed first.
 
-To file one **against another project**, from wherever you are, use the one command that works in both modes rather than editing that project's files by hand:
+A project's remote is its truth. Pull before editing and treat work as unfinished while `git status` is dirty or `git log origin/master..HEAD` is non-empty.
 
-```
-pwsh -File ~/.agents/tools/Add-ProjectIntake.ps1 -Project <name-or-path> -Id <slug> \
-  -Title "<what is wrong, in one line>" -From "<the project and task you were doing>" \
-  -Relationship <adjacent|prerequisite|follow-up|defect|opportunity> \
-  -Value <low|medium|high> -Risk <low|medium|high> \
-  -Evidence "verifier=inspection; subject=<what you saw>; result=verified; reference=<path>"
-```
+3. Read what other agents filed against this project before choosing work. Enrolled: `Add-ProjectIntake.ps1 -List`, or the generated `BACKBURNER.md` — nothing injects these, so reading is yours. Legacy: the `agent-harness:intake:v1` block, which the session-start hook surfaces where the hooks are installed. `Get-WorkResume.ps1` never enumerates the queue. Reject an item with its reason; delete nothing to shrink a count.
 
-Add `-List` to read a project's intake instead of writing to it. A bare project name resolves under the projects root, which is what the folder-name-equals-repo-name convention buys; set `AGENT_PROJECTS_ROOT` where that root differs, as it does in a container.
+If the exact project path `.agents/work/state.json` exists, Work Scope is enrolled and that structured file is authoritative. Load and follow the `work-scope` skill, which owns the tools, guards, evidence, and handoffs; its tools live in `.agents/tools/`, never in the skill package. Never edit the generated views. Invalid state fails closed.
 
-## Start and resume
+When `.agents/work/state.json` is absent, legacy `TASK.md`, `BACKBURNER.md`, and `LOG.md` retain their owners. Durable capability state belongs in `MAP.md`; `STATUS.md` is retired. To file a finding against another project, use `Add-ProjectIntake.ps1`; the target project owns the repair unless it blocks assigned work or Douglas explicitly redirects it.
 
-1. Read this file, `TASK.md`, and recent `LOG.md`.
-2. Run `git status --short --branch` and inspect worktrees before editing.
-3. Read `MAP.md` for architecture, data, ownership, integrations, or important paths.
-4. Read `DESIGN.md` for interface work and `PRODUCT.md` when present.
+## Safety and boundaries
 
-## Task-state authority
-
-If the exact project path `.agents/work/state.json` exists, Work Scope is enrolled and that structured file is authoritative. Load and follow the `work-scope` skill, including its scope-guard, ownership, evidence, and handoff rules. Resolve tools from the package containing the loaded skill, then run `Test-WorkState.ps1`, `Get-WorkResume.ps1`, and `Reconcile-WorkState.ps1` with `-Root <project-root>` before changing task state. Treat `PROJECT.md`, `TRACKS.md`, `TASK.md`, `BACKBURNER.md`, and `LOG.md` as generated, read-only views. Route active-cell changes through `Update-WorkState.ps1`, executed checks through `Invoke-WorkScopeEvidence.ps1`, and pre-write ownership checks through `Test-WorkScopeGuard.ps1`. Route adjacent or deferred work through `Capture-WorkDiscovery.ps1`; use `New-WorkHandoff.ps1` for independent outcomes. A present but invalid state file fails closed and never falls back to legacy task files.
-
-When `.agents/work/state.json` is absent, the legacy `TASK.md`, `BACKBURNER.md`, and `LOG.md` files retain their documented ownership. In either mode, durable capability state belongs in `MAP.md`, not in a task file. `STATUS.md` is retired; do not create one.
-
-## Project files
-
-- `TASK.md`: generated Work Scope view when enrolled; otherwise the legacy current goal, actionable queue, blockers, completed evidence, and next verifier.
-- `LOG.md`: generated Work Scope view when enrolled; otherwise the legacy append-only completed-work record.
-- `BACKBURNER.md`: generated Work Scope discovery view when enrolled; otherwise legacy parked ideas.
-- `MAP.md`: architecture, paths, data flow, integrations, and ownership.
-- `DESIGN.md`: universal interface rules plus project-specific design rules.
-- `PRODUCT.md`: optional product intent for an app or product repository.
-- `MEMORY.md`: lean links to durable references.
-- `skills-manifest.json`: canonical baseline and project skill bindings.
-- `data-manifest.yaml`: external-data authorities, adapters, restore rules, and verifiers.
-- `secret-manifest.json`: value-free secret names, providers, trust boundaries, and consumers.
-- `.gitignore`: carries a managed `agent-harness:project-gitignore:v1` block covering the task hooks' own runtime state. Put project-owned rules outside the markers; anything inside them is regenerated.
-- `.gitattributes`: carries a managed `agent-harness:project-gitattributes:v1` block exempting vendored third-party skills from whitespace linting, since their bytes are referenced and never edited. Project-owned attributes go outside the markers.
+- Do not infer authority for pushes, merges, force updates, deletions, credential use, spending, or publishing. On unattended work, record reversible assumptions and batch approvals rather than stopping safe work.
+- Before vault work, read `VAULT-PROTOCOL.md` and the active vault's `IA.md`. Exclude vault-root `AI Reference\`, `40_Reference\AI Reference.md`, vault-root `26_Sensitive\`, `31_Business\Other People Reference.md`, and `Actual Documents\Identity` under the Google Drive root from reads, searches, globs, edits, links, mirrors, and delegated work. Only with Douglas's explicit authorization may a file move one way into `26_Sensitive\`; never read, open, list, enumerate, glob, grep, preview, diff, hash, link, mirror, back up, commit, copy, export, rename, restore, extract, or move anything out.
+- For interface work, use `impeccable`, follow `DESIGN.md` and `.agents/design/LIBRARIES.md`, and consult the design-language registry before creating a visual language. Verify browser-visible changes in a browser.
+- Update affected routing documents in the same work unit; a deferred documentation update is an unfinished change. Nothing is complete before its tests, the repository verifier, and an adversarial pass are green. When files change, finish with a Files list marking each logical document `NEW` or `UPDATED`, a short summary, and absolute paths.
 
 ## What is managed here, and what is yours
 
-Everything above the closing marker is generated from the shared harness and is replaced on every project sync. Edit it in `.agents/templates/AGENTS.md` in the harness repository, not here. Everything below the marker is this project's own and is never rewritten -- put project identity, real commands, and repository-specific rules there.
-
-The block covered only the portable operating rules until 2026-08-09. The startup procedure, the task-state authority and the project-files list sat outside it, so a correction to any of the three had to be re-applied by hand in every project and drifted the moment one was missed. Douglas ruled (`ahp-project-block-scope`) to widen it to cover all three.
+Everything above the closing marker is generated from `.agents/templates/AGENTS.md` in the harness repository. Everything below it is project-owned: identity, real commands, local boundaries, and product adapters.
 <!-- agent-harness:portable:v4:end -->
 
 ## Project identity

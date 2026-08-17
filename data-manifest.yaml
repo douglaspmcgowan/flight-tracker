@@ -1,4 +1,4 @@
-version: 1
+version: 2
 project: "flight-tracker"
 data_root_env: "PROJECT_DATA_ROOT"
 assets: []

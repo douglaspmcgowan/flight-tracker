@@ -1,0 +1,49 @@
+{
+  "receipt_id": "2de6647e-7c3c-4c80-9c90-b2f415281ec1",
+  "check_id": "full-project-contract",
+  "verifier": "command",
+  "subject": "FT-FULL-CONTRACT-V2",
+  "project_id": "flight-tracker",
+  "track_id": "project-operations",
+  "capability_id": "handoff-completion",
+  "cell_id": "handoff-completion@D2.followup.1",
+  "task_id": "FT-FULL-CONTRACT-V2",
+  "result": "fail",
+  "executable": "pwsh.exe",
+  "executable_sha256": "362a356ce7f0940ec74f73a8fc2c990a2cc24a38a11c90bbd8eca947110ad139",
+  "arguments_sha256": "27cb127dabab008db87cd8e12f51a7d45246ff47cdae28ab9c7448e546efd7c7",
+  "output_sha256": "484ac882c95fa7ec5278b0ffb430f6e38a4921a4782783ad03de5a303cd855ae",
+  "output_size_bytes": 1385,
+  "timed_out": false,
+  "output_limit_exceeded": false,
+  "timeout_seconds": 300,
+  "max_output_bytes": 2097152,
+  "verifier_inputs": [
+    {
+      "reference": "scripts/verify-agent-project.ps1",
+      "sha256": "09dfda2282c9b68fd0119ab1a4829324e77ba7d20b2c627d9c12ea25e9dc4738",
+      "size_bytes": 470
+    }
+  ],
+  "declared_verifier_inputs": null,
+  "artifacts": [
+    {
+      "reference": "MAP.md",
+      "sha256": "218f28ca1a0fce8530cae8470e52593acea8c6f458f906584111b040d8e7ebea",
+      "size_bytes": 8126
+    },
+    {
+      "reference": "scripts/verify-agent-project.ps1",
+      "sha256": "09dfda2282c9b68fd0119ab1a4829324e77ba7d20b2c627d9c12ea25e9dc4738",
+      "size_bytes": 470
+    },
+    {
+      "reference": "skills-manifest.json",
+      "sha256": "9e307051bb2cdcc658bdfe81c2c81a74596f68320403fa3484666cb207d0847e",
+      "size_bytes": 3121
+    }
+  ],
+  "exit_code": 1,
+  "started_at": "2026-08-17T00:12:22.5164352Z",
+  "finished_at": "2026-08-17T00:13:14.6318968Z"
+}

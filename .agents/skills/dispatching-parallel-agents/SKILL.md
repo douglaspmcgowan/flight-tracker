@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: dispatching-parallel-agents
 description: Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies
+when_to_use: "Two or more problems that share no state and impose no ordering on each other - several unrelated bugs, several unrelated files, several unrelated questions. One agent per problem domain, dispatched concurrently, then reviewed and integrated. Not for work that must be sequenced, work that writes the same file, or one problem cut into steps. To run a written plan's tasks by subagent inside this session, use subagent-driven-development instead."
 ---
 
 # Dispatching Parallel Agents
@@ -166,3 +167,16 @@ After agents return:
 2. **Check for conflicts** - Did agents edit same code?
 3. **Run full suite** - Verify all fixes work together
 4. **Spot check** - Agents can make systematic errors
+
+<!-- agent-harness:skill-overlay:dispatching-parallel-agents-writer-isolation -->
+## Writer isolation
+
+Before dispatching mutating agents, create a baseline commit and give every writer an
+isolated worktree or use serial mutation in one checkout. Each brief records
+its baseline and touch list, and must never run repo-wide Git mutators: `git stash`,
+`git reset`, `git clean`, `git checkout`, `git add -A`, or an equivalent
+operation that can affect another lane.
+
+The parent compares each per-lane diff against the baseline before integration;
+agent reports are evidence to inspect, never a substitute for that review.
+<!-- /agent-harness:skill-overlay:dispatching-parallel-agents-writer-isolation -->

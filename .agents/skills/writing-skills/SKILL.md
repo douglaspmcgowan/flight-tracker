@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: writing-skills
 description: Use when creating new skills, editing existing skills, or verifying skills work before deployment
+when_to_use: "Creating a new skill, editing an existing one, or verifying a skill works before it is deployed. Applies test-driven development to process documentation - watch an agent fail without the skill first, or you do not know what the skill has to teach. Covers what is and is not a skill (a reusable technique, never a narrative about solving something once), when one is worth creating at all, and Anthropic's official authoring guidance. Read test-driven-development first; this skill assumes its RED-GREEN-REFACTOR cycle."
 ---
 
 # Writing Skills

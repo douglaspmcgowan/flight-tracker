@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: executing-plans
 description: Use when you have a written implementation plan to execute in a separate session with review checkpoints
+when_to_use: "A written implementation plan exists and you are working through it in a separate session with review checkpoints. Covers loading and reviewing the plan, executing its tasks, completing development, when to stop and ask rather than guess, and when to return to review instead of forcing through a blocker. If subagents are available in this runtime, subagent-driven-development is the better fit for the same plan."
 ---
 
 # Executing Plans

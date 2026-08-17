@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: test-driven-development
 description: Use when implementing any feature or bugfix, before writing implementation code
+when_to_use: "Implementing any feature or bugfix, before the implementation code is written. Red-green-refactor, with watching the test fail as a mandatory step rather than a nicety - if you did not see it fail, you do not know it tests the right thing. Covers what counts as a real RED, what a passing-on-the-first-run test actually proves, and the narrow exceptions worth raising with your human partner instead of assuming."
 ---
 
 # Test-Driven Development (TDD)

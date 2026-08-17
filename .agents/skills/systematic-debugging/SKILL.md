@@ -2,6 +2,7 @@
 provenance: "external: obra/superpowers@v6.2.0 (MIT) — verified in .agents/skills/UPSTREAM-PROVENANCE.json"
 name: systematic-debugging
 description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
+when_to_use: "Any bug, test failure, or unexpected behaviour, BEFORE proposing a fix. Four phases - root-cause investigation, pattern analysis, hypothesis and testing, then the fix - built around one rule: a change that removes the symptom without a found root cause is a failure, not a fix. Reach for it especially when the fix looks obvious, when the pressure is to move on, and when the same thing has already been fixed once."
 ---
 
 # Systematic Debugging
@@ -282,3 +283,27 @@ These techniques are part of systematic debugging and available in this director
 - **`root-cause-tracing.md`** - Trace bugs backward through call stack to find original trigger
 - **`defense-in-depth.md`** - Add validation at multiple layers after finding root cause
 - **`condition-based-waiting.md`** - Replace arbitrary timeouts with condition polling
+
+<!-- agent-harness:skill-overlay:systematic-debugging-technique-menu -->
+## Technique Menu — ranked by feedback-loop tightness
+
+When Phase 1 investigation stalls, don't reach for a random move. Pick the highest technique on this
+list that fits — a tighter feedback loop (faster, more repeatable, less guesswork per iteration) tells
+you more per attempt. Work down only as the tight ones are exhausted. (The *techniques* are standard;
+the ordering-by-loop-tightness and the searchable-prefix cleanup rule below come from Matt Pocock's
+`diagnosing-bugs`.)
+
+1. **Read the error / full stack trace** — instant, often contains the answer. Never skim it.
+2. **Reproduce with a minimal failing test** — the fastest repeatable loop; also becomes the Phase-4 test.
+3. **Instrument the boundaries** — targeted logging at each component edge (see Phase 1.4). Tag every
+   temporary log line with a unique searchable prefix, e.g. `[DEBUG-a1b2]`, so a single grep finds and
+   removes ALL of it when the bug is closed. Never leave debug instrumentation in the fix.
+4. **Binary-search the change set** — `git bisect`, or comment out halves, to localize which change/region
+   introduced it.
+5. **Diff working vs broken** — compare against a known-good sibling (Phase 2); list every difference.
+6. **Add inline assertions / invariant checks** — make the bad state fail loudly at its origin, not downstream.
+7. **Explain the data flow line by line** (rubber-duck) — trace the bad value backward to its source.
+8. **Step through with a debugger** — when the loop above hasn't localized it and state is complex.
+9. **Widen the net** — dependencies, config, environment/secret propagation, version drift.
+10. **Zoom out and question the architecture** — the loosest loop; only after 3+ fixes failed (Phase 4.5).
+<!-- /agent-harness:skill-overlay:systematic-debugging-technique-menu -->

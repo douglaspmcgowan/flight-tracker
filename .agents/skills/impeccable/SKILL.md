@@ -80,3 +80,54 @@ After init writes PRODUCT.md, resume without rerunning `context.mjs`; init loads
 **Doctor:** `$impeccable doctor` reports and repairs drift between this project's Impeccable artifacts (PRODUCT.md, DESIGN.md and its sidecar, config, surface briefs, the hook) and what this version reads. Load [reference/doctor.md](reference/doctor.md) when the user invokes it, or when they ask what is out of date, stale, or needs refreshing. A `CONTEXT_STALE` directive in Setup's output is the cheap subset of the same report; act on it there per its own instructions rather than running doctor unasked.
 
 **Never repair drift as a side effect of a design task.** A `CONTEXT_STALE` finding is reported, not acted on, unless the user asks. The one exception is a finding marked `auto`, which the next write to that file performs anyway.
+
+<!-- agent-harness:skill-overlay:impeccable-design-library-route -->
+## Where the concrete design material actually is
+
+**This package is the process. It is not the menu, and it carries no route to one.** Verified by
+grep across the whole package on 2026-08-09: zero references to `~/.agents/design/`, to
+`LIBRARIES.md`, or to `~/.agents/DESIGN.md`. Three independent blind probes reached this skill and
+had to be rescued by the shared contract, and the third one measured the counterfactual exactly —
+a session that enters through this skill and never reads `AGENTS.md` gets a quality floor and a
+Refuse list with **no typeface pool, no palette table, no animation package comparison, and no
+mechanical pre-ship matrix**, and fills each gap from training memory. That reliably produces the
+defaults the floor below tells you to avoid.
+
+So before Setup, open the router and pick the leaf your decision needs:
+
+**`~/.agents/design/LIBRARIES.md`** — a pointer table, not an enumeration. Read it there rather
+than working from any list, including this one; leaves are added over time and a copied list goes
+stale. The ones a landing, product or marketing surface reaches for most:
+
+| You are deciding | Leaf |
+|---|---|
+| Which typeface, and whether a serif is even available to you | `design/type/families.md` |
+| Palette construction, contrast arithmetic, type scale, grid | `design/fundamentals.md` |
+| Which animation package, and whether motion is warranted at all | `design/animation/libraries.md`, with `design/animation/forbidden.md` |
+| Whether a marketing or portfolio page is finished | `design/preflight.md` — mechanical, ~60 boxes |
+| Whether a **dashboard** is finished | `design/dashboards.md` — `preflight.md` explicitly does not cover this medium |
+| Touch targets, safe areas, mobile type, gesture conflicts | `design/mobile.md` |
+| Surface construction: nested enclosures, button architecture, island nav | `design/craft/high-end.md` |
+| Whether a committed visual world already exists | `design/languages/registry.md` — check before inventing another |
+
+**`~/.agents/DESIGN.md`** holds the universal rules and, in its *Precedence* section, states where
+this package outranks it and where it does not. Read that section before resolving a conflict by
+instinct: they genuinely disagree in places, and the resolution is not uniform in either
+direction.
+
+**Two corrections to this package's own text**, both measured rather than inferred:
+
+- Its craft reference opens by saying a design hook already enforces the mechanical checks as you
+  edit, so you should act on its findings instead of re-auditing each rule. **There is no design
+  hook on any surface.** The installed hooks are the continue, security and task-state
+  dispatchers; none inspects design. That condition never fires, so every check in that file is
+  yours to run by hand.
+- Its commands table lives only in the canonical package. The thin projection a product renders
+  carries the description and `when_to_use` and no sub-command inventory, so an agent that meets
+  this skill through a product listing cannot see that the sub-commands exist. Open the canonical
+  `SKILL.md` for the full table.
+
+If `~/.agents` does not exist in this environment — a container, a fresh machine — the same
+material is in the private `pyrgos-ai/doug-harness` repository under `.agents/design/`. Read it in
+place; never vendor a copy into the project you are working in.
+<!-- /agent-harness:skill-overlay:impeccable-design-library-route -->

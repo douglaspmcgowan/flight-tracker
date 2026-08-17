@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "assets/schema.json",
-      "sha256": "9b4b74d0c2acf58004cc500b0c563a69347e40c38ec39bad1ed5d84189cfad82"
+      "sha256": "a41180669bfc7aecb6da131febd64b2455cdba8850550bf7c2ad8a28350b34c0"
     },
     {
       "path": "assets/selection-rules.json",
@@ -13,23 +13,23 @@
     },
     {
       "path": "tools/WorkScope.psm1",
-      "sha256": "723d5cb90a4a79b931f1a0e2e5f8dc0e46a25a221fa85a3de435f266d1b501ac"
+      "sha256": "ac08a53755d5f88788bd469eb133ce8d811c65e26e27b1b04a86580346bc37ec"
     },
     {
       "path": "tools/Capture-WorkDiscovery.ps1",
-      "sha256": "45761f8207e0ab3609a51737ba0a9bfea735e9038d7418b445bc855ed5e89889"
+      "sha256": "08e48e0ed7cf35ae6d18fe3258fb54127af035ac1f372dfe6527e431483a8449"
     },
     {
       "path": "tools/Get-WorkResume.ps1",
-      "sha256": "1a9ce115b4b309ab655d781323a3ef6d8968c864e8d23eb267025f043158b284"
+      "sha256": "5ccfa0c1214a4a0103af22cb6be44f5b487122da4a65bf9100d68b9528890d93"
     },
     {
       "path": "tools/Initialize-WorkScope.ps1",
-      "sha256": "b0cfdf1021dcf03e72ce1debab22871fb19a44120971c92792345929d31ca8bf"
+      "sha256": "8a2f6b0ed6a3e30a37c928d2a49f5cb1747e93c246fa3ddfea7a318bbfa5873c"
     },
     {
       "path": "tools/Invoke-WorkScopeEvidence.ps1",
-      "sha256": "51444446537f86a3362808c9cba991ad52ea8c06849f0e0eafda2fce7ab1672e"
+      "sha256": "3345fc46735a8a2f492095f0e0fdb982797568b989c0e255a78beee786b7ecaf"
     },
     {
       "path": "tools/New-WorkHandoff.ps1",
@@ -45,7 +45,7 @@
     },
     {
       "path": "tools/Select-FrontierWork.ps1",
-      "sha256": "8ec4cd70ff4bc4b601d88316cfa5147af2da46591b90027852f4ae788f7916cf"
+      "sha256": "1309df11bb8e9645bc3a1d1a35d2dd71c8a1177011917a5b34f9f1ad6d9b7734"
     },
     {
       "path": "tools/Set-WorkFrontier.ps1",
@@ -57,11 +57,11 @@
     },
     {
       "path": "tools/Test-WorkState.ps1",
-      "sha256": "763b29214b9f735a11c7fc587ee0959a3cbc20c883d479d13cf2b5480da7f69c"
+      "sha256": "4bcd2b618c1eee44f697c8b692a4dfcc24f68b5e478af45b4839208552e81c21"
     },
     {
       "path": "tools/Update-WorkState.ps1",
-      "sha256": "a0ea857f0e7a6bc5d2674fd1fda073ce200303190d6e4b4012314b4405d251b0"
+      "sha256": "ff1d0700d0c23b3d12c598ff1913379dffb70d96b40bde97b11dee63fc9887d8"
     }
   ]
 }

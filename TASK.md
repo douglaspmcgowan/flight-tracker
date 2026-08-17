@@ -1,10 +1,12 @@
 <!-- GENERATED FROM .agents/work/state.json. DO NOT EDIT DIRECTLY. -->
 # Active Work
 
+
 Project: flight-tracker
 Initiative: flight-finder-coordination
 Primary track: project-operations
 Capability: handoff-completion
+Cell: handoff-completion@D2.followup.1
 Depth: D2 (Complete)
 Frontier mode: drilldown
 Depth ceiling: D2
@@ -14,7 +16,7 @@ Status: closed
 
 ## Goal
 
-Complete and verify Flight Finder handoff completion at D2.
+Follow up on handoff-completion@D2: Closed FT-FULL-CONTRACT evidence has gone stale: Windows silently auto-updated the pinned PowerShell 7 AppX package from 7.6.4.0 to a newer build, so the declared acceptance-check executable path no longer exists, and skills-manifest.json content has also drifted since capture. The underlying verification genuinely passed on 2026-08-08; re-running full-project-contract now against the current environment to refresh the evidence trail.
 
 ## In scope
 
@@ -32,11 +34,11 @@ Complete and verify Flight Finder handoff completion at D2.
 
 ## Tasks
 
-- [x] FT-FULL-CONTRACT: Run the existing shared harness verifier through a project-local PowerShell 7 wrapper because the prescribed legacy cmd owner is incompatible with Process.Kill(true) (status: closed; acceptance: The canonical shared harness project verifier exits zero against the enrolled coordination checkout under PowerShell 7.)
+- [x] FT-FULL-CONTRACT-V2: Re-verify full project contract against current environment (status: closed; acceptance: The canonical shared harness project verifier exits zero against the enrolled coordination checkout under the currently installed PowerShell 7.)
 
 ## Declared acceptance checks
 
-- FT-FULL-CONTRACT/full-project-contract: C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe argv=["-NoProfile","-File","scripts\\verify-agent-project.ps1"]; inputs=[scripts/verify-agent-project.ps1]; artifacts=[MAP.md, scripts/verify-agent-project.ps1, skills-manifest.json]; timeout=300s; max-output=2097152B
+- FT-FULL-CONTRACT-V2/full-project-contract: C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe\pwsh.exe argv=["-NoProfile","-File","scripts\\verify-agent-project.ps1"]; inputs=[scripts/verify-agent-project.ps1]; artifacts=[MAP.md, scripts/verify-agent-project.ps1, skills-manifest.json]; timeout=300s; max-output=2097152B
 
 ## Blockers and dependencies
 
@@ -44,7 +46,7 @@ Complete and verify Flight Finder handoff completion at D2.
 
 ## Verification evidence
 
-- [test/pass] FT-FULL-CONTRACT | .agents/work/evidence/3e112356-826c-4a43-a9fc-d7cedd56d36a.json | sha256:6eaaa00c00da | receipt:3e112356-826c-4a43-a9fc-d7cedd56d36a
+- [command/pass] FT-FULL-CONTRACT-V2 | .agents/work/evidence/11c92ea3-5b9c-402c-ac88-6492b8abae04.json | sha256:f648fc257ec7 | receipt:11c92ea3-5b9c-402c-ac88-6492b8abae04
 
 ## Discoveries captured
 

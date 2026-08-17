@@ -72,7 +72,9 @@ Each append-only entry contains:
 ## Verification
 
 - Run `scripts\Record-Correction.test.ps1`.
-- Re-read this file and the compatibility alias for trigger overlap and contradictory routing.
+- Re-read this file for trigger overlap and contradictory routing. There is no companion package to
+  cross-check: the `feedback` compatibility alias was retired on 2026-08-06 (see **Provenance**) and
+  `correct` is the only surface.
 - For each real correction, run the tests or verifiers attached to its enforcement artifacts.
 
 ## Final report
