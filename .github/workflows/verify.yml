@@ -27,7 +27,7 @@ jobs:
             $_ -match '(^|/)(venv|__pycache__|taskstate)(/|$)' -or
             $_ -match '\.pyc$' -or
             $_ -match 'runtime\.(out|err)\.log$' -or
-            ($_ -match '(^|/)\.env($|\.)' -and $_ -ne '.env.example')
+            ($_ -match '(^|/)\.env($|\.)' -and $_ -notmatch '(^|/)\.env\.example$')
           }
           if ($blocked) {
             $blocked | ForEach-Object { Write-Error "Excluded path is tracked: $_" }
