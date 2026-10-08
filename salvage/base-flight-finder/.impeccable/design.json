@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-25T10:24:34.4125579-04:00",
+  "title": "Design System: Flight Finder",
+  "extensions": {
+    "colorMeta": {
+      "midnight-teal": {
+        "role": "neutral",
+        "displayName": "Midnight Teal",
+        "canonical": "#031820",
+        "tonalRamp": ["#031820", "#072530", "#0e3640", "#1a4a52", "#2d5e63", "#80a8a5", "#bcd2cf", "#ecf3f2"]
+      },
+      "sea-glass": {
+        "role": "primary",
+        "displayName": "Sea Glass",
+        "canonical": "#80a8a5",
+        "tonalRamp": ["#102120", "#193331", "#2d5e5a", "#4b7c78", "#80a8a5", "#a5c3c0", "#cfe0de", "#eef5f4"]
+      },
+      "timetable-cream": {
+        "role": "neutral",
+        "displayName": "Timetable Cream",
+        "canonical": "#ecdfc0",
+        "tonalRamp": ["#2d281d", "#51472f", "#766848", "#a18e65", "#c4af84", "#dfcea9", "#ecdfc0", "#faf6ed"]
+      },
+      "fare-rise-scarlet": {
+        "role": "tertiary",
+        "displayName": "Fare-rise Scarlet",
+        "canonical": "#c1272d",
+        "tonalRamp": ["#2a080a", "#4d0d11", "#73151a", "#9a1e24", "#c1272d", "#dc5b5f", "#ed9a9d", "#f9d7d8"]
+      },
+      "fare-drop-green": {
+        "role": "tertiary",
+        "displayName": "Fare-drop Green",
+        "canonical": "#10b981",
+        "tonalRamp": ["#05251b", "#074633", "#08684b", "#0a8a61", "#10b981", "#54d3a8", "#9be7cc", "#d9f8ec"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Route Display",
+        "purpose": "Page titles, route codes, and decision headlines."
+      },
+      "body": {
+        "displayName": "Task Text",
+        "purpose": "Instructions, statuses, and supporting explanations."
+      },
+      "data": {
+        "displayName": "Fare Data",
+        "purpose": "Prices, points, taxes, seats, timestamps, and program codes."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "state-fast",
+        "value": "150ms ease",
+        "purpose": "Hover, focus, and selected-state transitions."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "mobile",
+        "value": "640px"
+      },
+      {
+        "name": "ledger-stack",
+        "value": "760px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary action with a compact operational shape.",
+      "html": "<button class=\"ds-btn-primary\">Save search</button>",
+      "css": ".ds-btn-primary { background: var(--accent, #80a8a5); color: var(--bg, #031820); padding: 10px 16px; border: 1px solid var(--accent, #80a8a5); border-radius: 4px; font: 600 0.875rem 'Outfit', sans-serif; transition: background 150ms ease, border-color 150ms ease; } .ds-btn-primary:hover { background: var(--accent-hover, #bcd2cf); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent, #80a8a5); outline-offset: 2px; }"
+    },
+    {
+      "name": "Route Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Airport-code input with a strong focus state.",
+      "html": "<input class=\"ds-route-input\" value=\"ORF\" aria-label=\"Origin airport\" />",
+      "css": ".ds-route-input { width: 7rem; background: var(--surface, #072530); color: var(--text, #ecdfc0); border: 1px solid var(--border, #1a4a52); border-radius: 8px; padding: 10px 12px; font: 500 0.875rem 'IBM Plex Mono', monospace; text-transform: uppercase; } .ds-route-input:focus-visible { outline: 2px solid var(--accent, #80a8a5); outline-offset: 2px; border-color: var(--accent, #80a8a5); }"
+    },
+    {
+      "name": "Mode Switch",
+      "kind": "custom",
+      "description": "Two-state progressive-disclosure control.",
+      "html": "<div class=\"ds-mode\" role=\"group\" aria-label=\"View mode\"><button class=\"ds-mode-active\">Simple</button><button>Analyst</button></div>",
+      "css": ".ds-mode { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface, #072530); border: 1px solid var(--border, #1a4a52); border-radius: 8px; } .ds-mode button { border: 0; border-radius: 4px; padding: 7px 12px; background: transparent; color: var(--text-secondary, #d4a574); font: 500 0.875rem 'Outfit', sans-serif; } .ds-mode button:hover { color: var(--text, #ecdfc0); } .ds-mode button:focus-visible { outline: 2px solid var(--accent, #80a8a5); outline-offset: 1px; } .ds-mode .ds-mode-active { background: var(--elevated, #0e3640); color: var(--accent, #80a8a5); }"
+    },
+    {
+      "name": "Availability Chip",
+      "kind": "chip",
+      "description": "Seat availability label with text and semantic color.",
+      "html": "<span class=\"ds-availability\">2 seats</span>",
+      "css": ".ds-availability { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid #10b981; border-radius: 999px; color: #10b981; background: rgba(16,185,129,0.08); font: 500 0.75rem 'IBM Plex Mono', monospace; }"
+    },
+    {
+      "name": "Comparison Row",
+      "kind": "custom",
+      "description": "Aligned cash-and-points evidence row.",
+      "html": "<div class=\"ds-ledger\"><strong>80,000 mi + $46</strong><span>2 seats · Business</span><span>Observed 4h ago</span></div>",
+      "css": ".ds-ledger { display: grid; grid-template-columns: minmax(12rem,1fr) minmax(10rem,1fr) auto; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border, #1a4a52); color: var(--text, #ecdfc0); font: 400 0.875rem 'Outfit', sans-serif; } .ds-ledger strong { color: var(--accent, #80a8a5); font: 600 0.875rem 'IBM Plex Mono', monospace; } .ds-ledger span:last-child { color: var(--text-secondary, #d4a574); font: 500 0.75rem 'IBM Plex Mono', monospace; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Calm Departure Board",
+    "overview": "Flight Finder combines a quiet operational surface with the character of a mid-century airline timetable. Information arrives in a strong reading order: route, decision, evidence, action. Simple mode keeps the runway clear. Analyst mode increases density through aligned columns and comparison controls while preserving the same component vocabulary.",
+    "keyCharacteristics": [
+      "Route-first hierarchy",
+      "Restrained Altitude palette",
+      "Monospaced numeric evidence",
+      "Progressive disclosure between Simple and Analyst modes",
+      "Visible source and freshness"
+    ],
+    "rules": [
+      {
+        "name": "Signal Rarity",
+        "body": "Semantic colors appear only where they convey fare direction, availability, warning, or success.",
+        "section": "colors"
+      },
+      {
+        "name": "Numeric Alignment",
+        "body": "Prices, points, taxes, seat counts, and timestamps use the mono face with tabular alignment.",
+        "section": "typography"
+      },
+      {
+        "name": "Grounded Surface",
+        "body": "At-rest content remains flat; elevation appears only when interaction or layering requires it.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do place route, dates, and cabin before derived recommendations.",
+      "Do show source, observation time, and cached status beside each result.",
+      "Do preserve cash, miles, and taxes as separate values.",
+      "Do use semantic color with text or icon labels.",
+      "Do let users switch modes without losing their search or filters."
+    ],
+    "donts": [
+      "Don't assemble the page from interchangeable dashboard cards.",
+      "Don't hide taxes, freshness, or the booking program behind a deal score.",
+      "Don't expose every analyst filter before the user chooses Analyst mode.",
+      "Don't use purple gradients, amber-primary palettes, glass panels, gradient text, or colored side-stripe borders.",
+      "Don't imply cached award availability is guaranteed; direct users to confirm with the airline before transferring points."
+    ]
+  }
+}
